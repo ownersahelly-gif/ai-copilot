@@ -185,12 +185,15 @@ function Studio() {
           if (isOwnTabEvent(ev, extras)) return;
         }
         const auto = autoExplain(ev);
-        // Try to grab a frame of the screen at this moment, with a marker
-        // for click events.
         let thumb: { url: string; w: number; h: number } | null = null;
-        if (streamRef.current) {
+        if (streamRef.current && videoRef.current?.videoWidth) {
           const isClick = ev.kind === "click" && typeof ev.x === "number" && typeof ev.y === "number";
-          thumb = isClick ? captureFrame(ev.x!, ev.y!) : captureFrame();
+          if (isClick) {
+            const scale = videoRef.current.videoWidth / Math.max(1, window.screen.width);
+            thumb = captureFrame(ev.x! * scale, ev.y! * scale);
+          } else {
+            thumb = captureFrame();
+          }
         }
         const enriched: RecordedEvent = {
           ...ev,
@@ -200,21 +203,8 @@ function Studio() {
           thumbH: thumb?.h,
         };
         setEvents((prev) => [...prev, enriched].slice(-200));
-
         if (!explainEach || shouldAutoAccept(ev)) return;
-
-        // Non-blocking: queue a desktop notification only (no modal, no pause)
-        // so the user can keep clicking. They can edit explanations on the
-        // review screen after pressing Stop.
-        const id = `p_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-        pendingPromptsRef.current.set(id, enriched);
-        try {
-          (agent as any).notify?.({
-            id,
-            title: "EchoPilot — captured step",
-            message: auto,
-          });
-        } catch { /* ignore */ }
+        setExplainQueue((q) => [...q, enriched]);
       } else if (e.type === "prompt_result") {
         const target = pendingPromptsRef.current.get(e.id);
         pendingPromptsRef.current.delete(e.id);
