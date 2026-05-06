@@ -24,12 +24,14 @@ export type AgentEvent =
 const URL_KEY = "echopilot.agent.url";
 const TOKEN_KEY = "echopilot.agent.token";
 
+const hasWindow = () => typeof window !== "undefined";
 export function getAgentUrl(): string {
+  if (!hasWindow()) return "ws://127.0.0.1:8765/ws";
   return localStorage.getItem(URL_KEY) || "ws://127.0.0.1:8765/ws";
 }
-export function setAgentUrl(u: string) { localStorage.setItem(URL_KEY, u); }
-export function getAgentToken(): string { return localStorage.getItem(TOKEN_KEY) || ""; }
-export function setAgentToken(t: string) { localStorage.setItem(TOKEN_KEY, t); }
+export function setAgentUrl(u: string) { if (hasWindow()) localStorage.setItem(URL_KEY, u); }
+export function getAgentToken(): string { return hasWindow() ? (localStorage.getItem(TOKEN_KEY) || "") : ""; }
+export function setAgentToken(t: string) { if (hasWindow()) localStorage.setItem(TOKEN_KEY, t); }
 
 type Listener = (s: AgentStatus, info?: { version?: string; platform?: string; error?: string }) => void;
 type EventListener = (e: AgentEvent) => void;
