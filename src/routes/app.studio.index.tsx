@@ -185,6 +185,15 @@ function Studio() {
             </div>
           </div>
 
+          {!agentConnected && (
+            <div className="mt-4 flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <div>
+                Desktop Agent is not connected. Recording captures real mouse and keyboard input from your machine via the Python sidecar — go to <span className="font-semibold">Settings → Desktop Agent</span> and connect it first.
+              </div>
+            </div>
+          )}
+
           <div className="mt-6 grid gap-4 lg:grid-cols-3">
             <div className="lg:col-span-2 rounded-xl border border-border/60 bg-card/40 p-5">
               <div className="mb-3 flex items-center gap-2 text-xs">
