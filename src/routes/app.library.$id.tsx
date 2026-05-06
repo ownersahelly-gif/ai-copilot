@@ -229,39 +229,29 @@ function WorkflowDetail() {
               <div className="h-2 w-full overflow-hidden rounded-full bg-secondary">
                 <motion.div className="h-full" style={{ background: "var(--gradient-primary)" }} animate={{ width: `${(currentStep / Math.max(steps.length, 1)) * 100}%` }} />
               </div>
-              <div className="mt-4 relative grid min-h-[200px] place-items-center overflow-hidden rounded-lg border border-dashed border-border/60 bg-background/40">
-                {livePreview ? (
-                  <video
-                    ref={videoRef}
-                    muted
-                    playsInline
-                    className="h-full max-h-[420px] w-full object-contain bg-black"
-                  />
-                ) : screenshot ? (
-                  <img src={screenshot} alt="Agent screen" className="max-h-[320px] w-full object-contain" />
+              <div className="mt-4 relative grid min-h-[260px] place-items-center overflow-hidden rounded-lg border border-dashed border-border/60 bg-black/60">
+                {screenshot ? (
+                  <img src={screenshot} alt="Agent screen" className="max-h-[480px] w-full object-contain" />
                 ) : running ? (
                   <div className="text-center">
                     <Camera className="mx-auto h-8 w-8 animate-pulse text-primary" />
-                    <p className="mt-2 text-xs text-muted-foreground">{agentStatus.status === "connected" ? "Agent executing on this machine…" : "Vision agent capturing screen…"}</p>
-                    <p className="mt-1 text-sm">{steps[Math.max(currentStep - 1, 0)]?.description}</p>
+                    <p className="mt-2 text-xs text-muted-foreground">Waiting for first frame from the desktop agent…</p>
                   </div>
-                ) : <p className="text-xs text-muted-foreground">Idle — enable live preview to watch your screen</p>}
+                ) : <p className="text-xs text-muted-foreground">Idle — start the workflow to see the agent's screen here</p>}
 
-                {/* Live current-step caption overlay */}
-                {livePreview && running && steps[Math.max(currentStep - 1, 0)] && (
-                  <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-3 text-center text-xs text-white">
+                {/* Step caption overlay */}
+                {running && steps[Math.max(currentStep - 1, 0)] && (
+                  <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 to-transparent p-3 text-center text-xs text-white">
                     Step {currentStep}/{steps.length} · {steps[Math.max(currentStep - 1, 0)]?.description}
                   </div>
                 )}
 
-                {/* Toggle button */}
-                <button
-                  onClick={() => setLivePreview((v) => !v)}
-                  className="absolute right-2 top-2 inline-flex items-center gap-1.5 rounded-md border border-border/60 bg-background/80 px-2 py-1 text-[11px] backdrop-blur hover:bg-background"
-                >
-                  {livePreview ? <MonitorOff className="h-3.5 w-3.5" /> : <Monitor className="h-3.5 w-3.5 text-primary" />}
-                  {livePreview ? "Stop preview" : "Live preview"}
-                </button>
+                {/* Live badge */}
+                {running && screenshot && (
+                  <div className="absolute right-2 top-2 inline-flex items-center gap-1.5 rounded-md border border-destructive/40 bg-background/80 px-2 py-1 text-[11px] backdrop-blur">
+                    <Monitor className="h-3.5 w-3.5 text-destructive" /> Live · agent screen
+                  </div>
+                )}
               </div>
               {pendingApproval && (
                 <div className="mt-3 flex items-center justify-between rounded-md border border-warning/30 bg-warning/10 p-3 text-xs">
