@@ -76,10 +76,14 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { name: "description", content: "Teach AI once, automate forever. EchoPilot learns your workflows and runs them across desktop apps and the web." },
       { name: "author", content: "EchoPilot" },
       { property: "og:title", content: "EchoPilot — AI Workflow Automation" },
-      { property: "og:description", content: "Your AI coworker that watches, learns and repeats." },
+      { property: "og:description", content: "Teach AI once, automate forever. EchoPilot learns your workflows and runs them across desktop apps and the web." },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
       { name: "twitter:site", content: "@Lovable" },
+      { name: "twitter:title", content: "EchoPilot — AI Workflow Automation" },
+      { name: "twitter:description", content: "Teach AI once, automate forever. EchoPilot learns your workflows and runs them across desktop apps and the web." },
+      { property: "og:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/80c7c4c2-fee0-4cb2-a0a8-e46fbd148dcb/id-preview-3581fbaa--ca0cfa38-a439-4aaa-896d-4d2ea8247da0.lovable.app-1778107511252.png" },
+      { name: "twitter:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/80c7c4c2-fee0-4cb2-a0a8-e46fbd148dcb/id-preview-3581fbaa--ca0cfa38-a439-4aaa-896d-4d2ea8247da0.lovable.app-1778107511252.png" },
     ],
     links: [
       {
