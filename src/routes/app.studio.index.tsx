@@ -424,7 +424,7 @@ function Studio() {
                 {screenOn ? <Monitor className="h-4 w-4 text-primary" /> : <MonitorOff className="h-4 w-4 text-muted-foreground" />}
                 <div>
                   <Label className="text-xs">Live screen preview</Label>
-                  <p className="text-[10px] text-muted-foreground">Shares your screen back into this panel as a reference.</p>
+                  <p className="text-[10px] text-muted-foreground">Required to capture step thumbnails & click markers.</p>
                 </div>
               </div>
               <Switch checked={screenOn} onCheckedChange={setScreenOn} />
