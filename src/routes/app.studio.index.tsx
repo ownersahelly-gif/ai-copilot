@@ -57,7 +57,7 @@ function Studio() {
   const [ignoreSelf, setIgnoreSelf] = useState(true);
   const [extraIgnore, setExtraIgnore] = useState("");
   const [screenOn, setScreenOn] = useState(false);
-  const [explainEach, setExplainEach] = useState(true);
+  const [explainEach, setExplainEach] = useState(false);
   const [pendingEvent, setPendingEvent] = useState<RecordedEvent | null>(null);
   const [pendingExplain, setPendingExplain] = useState("");
 
@@ -201,16 +201,16 @@ function Studio() {
 
         if (!explainEach || shouldAutoAccept(ev)) return;
 
-        // Ask wherever the user is via native OS dialog
+        // Non-blocking: queue a desktop notification only (no modal, no pause)
+        // so the user can keep clicking. They can edit explanations on the
+        // review screen after pressing Stop.
         const id = `p_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
         pendingPromptsRef.current.set(id, enriched);
         try {
-          agent.pauseRecording();
-          agent.prompt({
+          (agent as any).notify?.({
             id,
-            title: "EchoPilot — explain this step",
-            message: `${ev.label}\n\n(Edit the explanation below or click Save to accept.)`,
-            default: auto,
+            title: "EchoPilot — captured step",
+            message: auto,
           });
         } catch { /* ignore */ }
       } else if (e.type === "prompt_result") {
