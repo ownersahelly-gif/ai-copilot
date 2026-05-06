@@ -332,21 +332,20 @@ function Studio() {
                 {recording ? (pendingEvent ? "Paused — waiting for your explanation" : "Recording — perform the task naturally") : "Idle"}
               </div>
               <div className="relative grid h-[260px] place-items-center overflow-hidden rounded-lg border border-dashed border-border/60 bg-background/40">
-                {recording ? (
+                {screenOn ? (
+                  <video
+                    ref={videoRef}
+                    muted
+                    playsInline
+                    className="h-full w-full object-contain bg-black"
+                  />
+                ) : recording ? (
                   <div className="text-center">
                     <Camera className="mx-auto h-10 w-10 animate-pulse text-primary" />
                     <p className="mt-3 text-sm text-muted-foreground">Vision agent is observing your screen…</p>
                   </div>
                 ) : (
                   <p className="text-sm text-muted-foreground">Press <span className="text-foreground">Start recording</span> when ready.</p>
-                )}
-                {webcamOn && (
-                  <video
-                    ref={videoRef}
-                    muted
-                    playsInline
-                    className="absolute bottom-3 right-3 h-24 w-32 rounded-md border border-border/70 bg-black object-cover shadow-lg"
-                  />
                 )}
               </div>
             </div>
