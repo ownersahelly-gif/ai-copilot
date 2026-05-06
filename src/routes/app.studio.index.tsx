@@ -60,6 +60,8 @@ function Studio() {
   const [explainEach, setExplainEach] = useState(true);
   const [explainQueue, setExplainQueue] = useState<RecordedEvent[]>([]);
   const [pendingExplain, setPendingExplain] = useState("");
+  const pendingEvent = explainQueue[0] ?? null;
+  const setPendingEvent = (_e: RecordedEvent | null) => { /* derived; use queue ops */ };
 
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startTsRef = useRef(0);
