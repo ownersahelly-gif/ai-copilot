@@ -271,11 +271,31 @@ function Studio() {
     }, 250);
   };
 
-  const stopRecording = () => {
+  // Crop the screen-frame data URL around (x,y) and return a small PNG data URL.
+  const cropAround = async (dataUrl: string, x: number, y: number, w: number, h: number, boxPx = 220): Promise<string | null> => {
+    try {
+      const img = new Image();
+      img.src = dataUrl;
+      await new Promise<void>((res, rej) => { img.onload = () => res(); img.onerror = () => rej(new Error("img")); });
+      const half = boxPx / 2;
+      const sx = Math.max(0, Math.min(w - boxPx, x - half));
+      const sy = Math.max(0, Math.min(h - boxPx, y - half));
+      const c = document.createElement("canvas");
+      c.width = boxPx; c.height = boxPx;
+      const ctx = c.getContext("2d");
+      if (!ctx) return null;
+      ctx.drawImage(img, sx, sy, boxPx, boxPx, 0, 0, boxPx, boxPx);
+      return c.toDataURL("image/jpeg", 0.75);
+    } catch { return null; }
+  };
+
+  const stopRecording = async () => {
     setRecording(false);
     if (tickRef.current) { clearInterval(tickRef.current); tickRef.current = null; }
     try { agent.stopRecording(); } catch { /* ignore */ }
-    const generated: WorkflowStep[] = events.map((e, i) => {
+
+    // Build initial steps synchronously for instant UI feedback
+    const draft: WorkflowStep[] = events.map((e, i) => {
       const type: WorkflowStep["type"] =
         e.kind === "click" ? "click" :
         e.kind === "type" ? "type" :
@@ -284,10 +304,50 @@ function Studio() {
       const label = e.explanation?.trim() || e.label;
       return { id: `s${i}`, type, target: e.label, description: label, confidence: 0.9 };
     });
-    setSteps(generated);
+    setSteps(draft);
     setVars([]);
     setName(`Recording ${new Date().toLocaleString()}`);
     setMode("review");
+
+    // Vision pass: enrich click steps with element descriptions + crops
+    const clickIndexes = events
+      .map((e, i) => ({ e, i }))
+      .filter(({ e }) => e.kind === "click" && e.thumbnail && typeof e.x === "number" && typeof e.y === "number");
+    if (clickIndexes.length === 0) return;
+
+    setBusy(true);
+    toast.info(`Analyzing ${clickIndexes.length} click target${clickIndexes.length > 1 ? "s" : ""}…`);
+
+    const enriched = [...draft];
+    for (const { e, i } of clickIndexes) {
+      try {
+        const res = await analyze({ data: {
+          imageUrl: e.thumbnail!,
+          x: e.x!,
+          y: e.y!,
+          appName: e.app,
+          rawLabel: e.label,
+        }});
+        if (res.error || !res.description) continue;
+        const crop = await cropAround(e.thumbnail!, e.x!, e.y!, e.thumbW ?? 1920, e.thumbH ?? 1080);
+        enriched[i] = {
+          ...enriched[i],
+          description: res.description,
+          target: res.description,
+          visualTarget: {
+            description: res.description,
+            ocr: res.ocr ?? undefined,
+            thumbnail: crop ?? undefined,
+          },
+        };
+        // Stream updates so the user sees progress
+        setSteps([...enriched]);
+      } catch (err) {
+        console.error("vision step failed", err);
+      }
+    }
+    setBusy(false);
+    toast.success("Vision analysis complete");
   };
 
   const submitExplanation = () => {
