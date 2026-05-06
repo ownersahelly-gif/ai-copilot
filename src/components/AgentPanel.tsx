@@ -58,7 +58,7 @@ export function AgentPanel() {
               <XCircle className="h-4 w-4 mt-0.5 text-destructive" />
               <div>
                 <div className="font-medium text-destructive">{info.error}</div>
-                <div className="mt-1 text-muted-foreground">Run <code className="rounded bg-secondary px-1">python agent.py</code> from the <code className="rounded bg-secondary px-1">python-agent/</code> folder, then paste the pairing token below.</div>
+                <div className="mt-1 text-muted-foreground">If you are using Safari, open the preview in Chrome first. Keep <code className="rounded bg-secondary px-1">python agent.py</code> running from the <code className="rounded bg-secondary px-1">python-agent/</code> folder, then connect again.</div>
               </div>
             </div>
           )}
