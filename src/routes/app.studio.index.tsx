@@ -355,22 +355,22 @@ function Studio() {
   const submitExplanation = () => {
     if (!pendingEvent) return;
     const text = pendingExplain.trim();
-    setEvents((prev) => {
-      const idx = prev.lastIndexOf(pendingEvent);
-      if (idx < 0) return prev;
-      const next = prev.slice();
-      next[idx] = { ...pendingEvent, explanation: text || pendingEvent.explanation };
-      return next;
-    });
-    setPendingEvent(null);
+    if (text) {
+      setEvents((prev) => {
+        const idx = prev.lastIndexOf(pendingEvent);
+        if (idx < 0) return prev;
+        const next = prev.slice();
+        next[idx] = { ...pendingEvent, explanation: text };
+        return next;
+      });
+    }
+    setExplainQueue((q) => q.slice(1));
     setPendingExplain("");
-    try { agent.resumeRecording(); } catch { /* ignore */ }
   };
 
   const skipExplanation = () => {
-    setPendingEvent(null);
+    setExplainQueue((q) => q.slice(1));
     setPendingExplain("");
-    try { agent.resumeRecording(); } catch { /* ignore */ }
   };
 
   const generateFromPrompt = async () => {
