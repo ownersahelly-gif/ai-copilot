@@ -325,6 +325,52 @@ class Recorder:
 app = FastAPI()
 
 
+# -------------------- Screen grab (for live preview) --------------------
+try:
+    import mss  # type: ignore
+    import io as _io
+    import base64 as _b64
+    from PIL import Image, ImageDraw  # type: ignore
+    _HAVE_GRAB = True
+    _SCT = None  # lazy
+except Exception as _e:
+    print(f"[agent] mss/Pillow unavailable: {_e!r} — live preview will be disabled")
+    _HAVE_GRAB = False
+
+def _grab_screen(mark: tuple[int, int] | None = None, max_w: int = 1280) -> str | None:
+    """Return a base64 JPEG of the primary screen, optionally with a marker."""
+    if not _HAVE_GRAB:
+        return None
+    global _SCT
+    try:
+        if _SCT is None:
+            _SCT = mss.mss()
+        mon = _SCT.monitors[1]  # primary
+        shot = _SCT.grab(mon)
+        img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
+        # Convert logical mark coords to physical (assume monitor scale)
+        if mark is not None:
+            mx, my = mark
+            sx = shot.width / max(1, mon["width"])
+            sy = shot.height / max(1, mon["height"])
+            px, py = int(mx * sx), int(my * sy)
+            draw = ImageDraw.Draw(img, "RGBA")
+            r = max(18, min(shot.width, shot.height) // 80)
+            draw.ellipse((px-r*2, py-r*2, px+r*2, py+r*2), fill=(255, 64, 96, 70))
+            draw.ellipse((px-r, py-r, px+r, py+r), outline=(255, 64, 96, 240), width=max(3, r//4))
+            draw.ellipse((px-3, py-3, px+3, py+3), fill=(255, 255, 255, 255))
+        if img.width > max_w:
+            ratio = max_w / img.width
+            img = img.resize((max_w, int(img.height * ratio)), Image.LANCZOS)
+        buf = _io.BytesIO()
+        img.save(buf, format="JPEG", quality=70)
+        return _b64.b64encode(buf.getvalue()).decode("ascii")
+    except Exception as ex:
+        print(f"[agent] grab failed: {ex!r}")
+        return None
+
+
+
 # -------------------- Workflow executor --------------------
 _KEY_MAP = {
     "enter": "enter", "return": "enter", "tab": "tab", "esc": "esc", "escape": "esc",
