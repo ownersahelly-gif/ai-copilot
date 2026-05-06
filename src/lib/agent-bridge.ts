@@ -44,6 +44,9 @@ export type RecordedEvent = {
   app?: string;
   window?: string;
   explanation?: string;
+  thumbnail?: string;     // data URL of screen frame at the moment of the event
+  thumbW?: number;        // intrinsic width of the captured frame
+  thumbH?: number;        // intrinsic height of the captured frame
 };
 
 const URL_KEY = "echopilot.agent.url";

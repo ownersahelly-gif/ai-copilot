@@ -64,6 +64,41 @@ function Studio() {
   const startTsRef = useRef(0);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  // Capture a frame from the live screen-share, optionally drawing a marker
+  // at (markX, markY) which are in physical pixels of the captured display.
+  const captureFrame = (markX?: number, markY?: number): { url: string; w: number; h: number } | null => {
+    const video = videoRef.current;
+    if (!video || !video.videoWidth || !video.videoHeight) return null;
+    const w = video.videoWidth, h = video.videoHeight;
+    const canvas = canvasRef.current ?? document.createElement("canvas");
+    canvasRef.current = canvas;
+    canvas.width = w; canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+    ctx.drawImage(video, 0, 0, w, h);
+    if (typeof markX === "number" && typeof markY === "number") {
+      const r = Math.max(14, Math.min(w, h) * 0.012);
+      // Outer halo
+      ctx.beginPath();
+      ctx.fillStyle = "rgba(255, 64, 96, 0.25)";
+      ctx.arc(markX, markY, r * 2.2, 0, Math.PI * 2);
+      ctx.fill();
+      // Inner ring
+      ctx.beginPath();
+      ctx.lineWidth = Math.max(3, r * 0.4);
+      ctx.strokeStyle = "rgba(255, 64, 96, 0.95)";
+      ctx.arc(markX, markY, r, 0, Math.PI * 2);
+      ctx.stroke();
+      // Center dot
+      ctx.beginPath();
+      ctx.fillStyle = "white";
+      ctx.arc(markX, markY, Math.max(2, r * 0.25), 0, Math.PI * 2);
+      ctx.fill();
+    }
+    return { url: canvas.toDataURL("image/jpeg", 0.7), w, h };
+  };
 
   // Screen-share preview lifecycle
   useEffect(() => {
@@ -147,7 +182,20 @@ function Studio() {
           if (isOwnTabEvent(ev, extras)) return;
         }
         const auto = autoExplain(ev);
-        const enriched: RecordedEvent = { ...ev, explanation: auto };
+        // Try to grab a frame of the screen at this moment, with a marker
+        // for click events.
+        let thumb: { url: string; w: number; h: number } | null = null;
+        if (streamRef.current) {
+          const isClick = ev.kind === "click" && typeof ev.x === "number" && typeof ev.y === "number";
+          thumb = isClick ? captureFrame(ev.x!, ev.y!) : captureFrame();
+        }
+        const enriched: RecordedEvent = {
+          ...ev,
+          explanation: auto,
+          thumbnail: thumb?.url,
+          thumbW: thumb?.w,
+          thumbH: thumb?.h,
+        };
         setEvents((prev) => [...prev, enriched].slice(-200));
 
         if (!explainEach || shouldAutoAccept(ev)) return;
@@ -376,7 +424,7 @@ function Studio() {
                 {screenOn ? <Monitor className="h-4 w-4 text-primary" /> : <MonitorOff className="h-4 w-4 text-muted-foreground" />}
                 <div>
                   <Label className="text-xs">Live screen preview</Label>
-                  <p className="text-[10px] text-muted-foreground">Shares your screen back into this panel as a reference.</p>
+                  <p className="text-[10px] text-muted-foreground">Required to capture step thumbnails & click markers.</p>
                 </div>
               </div>
               <Switch checked={screenOn} onCheckedChange={setScreenOn} />
@@ -434,6 +482,13 @@ function Studio() {
                       className="flex items-start gap-2 rounded-md bg-secondary/40 px-2.5 py-1.5 text-xs"
                     >
                       <span className="font-mono text-[10px] text-muted-foreground">+{(e.ts/1000).toFixed(1)}s</span>
+                      {e.thumbnail && (
+                        <img
+                          src={e.thumbnail}
+                          alt=""
+                          className="h-10 w-16 shrink-0 rounded border border-border/60 object-cover"
+                        />
+                      )}
                       <div className="min-w-0 flex-1">
                         <div className="truncate">{e.label}</div>
                         {e.explanation && (
