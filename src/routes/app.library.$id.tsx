@@ -12,6 +12,7 @@ import {
 import { getWorkflow, updateWorkflow, startRun, type Workflow, type WorkflowStep, type WorkflowVariable } from "@/lib/workflows";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
+import { agent, useAgentStatus, type AgentEvent } from "@/lib/agent-bridge";
 
 export const Route = createFileRoute("/app/library/$id")({ component: WorkflowDetail });
 
@@ -29,6 +30,9 @@ function WorkflowDetail() {
   const [running, setRunning] = useState(false);
   const [currentStep, setCurrentStep] = useState(0);
   const [logs, setLogs] = useState<{ ts: string; level: string; msg: string }[]>([]);
+  const [screenshot, setScreenshot] = useState<string | null>(null);
+  const [pendingApproval, setPendingApproval] = useState<{ runId: string; index: number } | null>(null);
+  const agentStatus = useAgentStatus();
 
   useEffect(() => {
     getWorkflow(id).then((d) => { setW(d); setName(d.name); setDesc(d.description ?? ""); }).catch(() => {});
@@ -44,32 +48,70 @@ function WorkflowDetail() {
     toast.success("Saved");
   };
 
+  const log = (level: string, msg: string) => setLogs((l) => [...l, { ts: new Date().toISOString(), level, msg }]);
+
+  const runReal = async (runRow: { id: string }) => {
+    return new Promise<boolean>((resolve) => {
+      const off = agent.onEvent((e: AgentEvent) => {
+        if (e.type === "run_started") log("info", `Agent accepted run · ${e.total} steps`);
+        else if (e.type === "step_started") { setCurrentStep(e.index + 1); log("info", `Step ${e.index + 1}: ${e.step.description}`); }
+        else if (e.type === "step_done") {
+          if (e.screenshot) setScreenshot(`data:image/jpeg;base64,${e.screenshot}`);
+          if (!e.ok) log("error", `Step failed: ${e.error}`);
+        }
+        else if (e.type === "awaiting_approval") setPendingApproval({ runId: runRow.id, index: e.index });
+        else if (e.type === "log") log(e.level, e.msg);
+        else if (e.type === "error") log("error", e.msg);
+        else if (e.type === "run_finished") {
+          log(e.ok ? "success" : "error", e.ok ? "Workflow completed on this machine" : "Workflow failed");
+          off(); resolve(e.ok);
+        }
+      });
+      try {
+        agent.runWorkflow({ runId: runRow.id, mode, steps, inputs });
+      } catch (err) {
+        log("error", (err as Error).message); off(); resolve(false);
+      }
+    });
+  };
+
+  const runSimulated = async () => {
+    for (let i = 0; i < steps.length; i++) {
+      await new Promise((res) => setTimeout(res, 800));
+      setCurrentStep(i + 1);
+      const s = steps[i];
+      log("info", `Step ${i+1}: ${s.description}`);
+      if (Math.random() < 0.12) {
+        log("warn", `Recovery agent: layout shift detected, re-locating element`);
+        await new Promise((res) => setTimeout(res, 500));
+        log("info", `Recovered. Continuing.`);
+      }
+    }
+    log("success", "Workflow completed (simulated — connect the desktop agent in Settings to run for real)");
+    return true;
+  };
+
   const run = async () => {
-    setRunning(true); setCurrentStep(0); setLogs([{ ts: new Date().toISOString(), level: "info", msg: "Starting run…" }]);
+    setRunning(true); setCurrentStep(0); setLogs([]); setScreenshot(null); setPendingApproval(null);
     try {
       const r = await startRun(id, mode, inputs);
-      // Simulate live execution updates
-      for (let i = 0; i < steps.length; i++) {
-        await new Promise((res) => setTimeout(res, 800));
-        setCurrentStep(i + 1);
-        const s = steps[i];
-        setLogs((l) => [...l, { ts: new Date().toISOString(), level: "info", msg: `Step ${i+1}: ${s.description}` }]);
-        if (Math.random() < 0.12) {
-          setLogs((l) => [...l, { ts: new Date().toISOString(), level: "warn", msg: `Recovery agent: layout shift detected, re-locating element` }]);
-          await new Promise((res) => setTimeout(res, 500));
-          setLogs((l) => [...l, { ts: new Date().toISOString(), level: "info", msg: `Recovered. Continuing.` }]);
-        }
-      }
-      setLogs((l) => [...l, { ts: new Date().toISOString(), level: "success", msg: "Workflow completed successfully" }]);
+      const useReal = agentStatus.status === "connected";
+      log("info", useReal ? "Dispatching to local desktop agent…" : "Running in simulator…");
+      const ok = useReal ? await runReal(r) : await runSimulated();
       await supabase.from("workflow_runs").update({
-        status: "completed",
+        status: ok ? "completed" : "failed",
         finished_at: new Date().toISOString(),
         current_step: steps.length,
-        logs: logs as never,
       }).eq("id", r.id);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Run failed");
-    } finally { setRunning(false); }
+    } finally { setRunning(false); setPendingApproval(null); }
+  };
+
+  const approve = (ok: boolean) => {
+    if (!pendingApproval) return;
+    agent.approveStep(pendingApproval.runId, ok);
+    setPendingApproval(null);
   };
 
   return (
@@ -176,21 +218,37 @@ function WorkflowDetail() {
           <div className="lg:col-span-2 space-y-4">
             <div className="glass rounded-xl p-5">
               <div className="mb-3 flex items-center justify-between">
-                <h3 className="font-display text-sm font-semibold">Live execution</h3>
+                <div className="flex items-center gap-2">
+                  <h3 className="font-display text-sm font-semibold">Live execution</h3>
+                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${agentStatus.status === "connected" ? "bg-success/15 text-success" : "bg-muted text-muted-foreground"}`}>
+                    {agentStatus.status === "connected" ? "REAL · agent" : "SIMULATED"}
+                  </span>
+                </div>
                 <span className="text-xs text-muted-foreground">{currentStep} / {steps.length}</span>
               </div>
               <div className="h-2 w-full overflow-hidden rounded-full bg-secondary">
                 <motion.div className="h-full" style={{ background: "var(--gradient-primary)" }} animate={{ width: `${(currentStep / Math.max(steps.length, 1)) * 100}%` }} />
               </div>
-              <div className="mt-4 grid h-[180px] place-items-center rounded-lg border border-dashed border-border/60 bg-background/40">
-                {running ? (
+              <div className="mt-4 grid min-h-[200px] place-items-center overflow-hidden rounded-lg border border-dashed border-border/60 bg-background/40">
+                {screenshot ? (
+                  <img src={screenshot} alt="Agent screen" className="max-h-[320px] w-full object-contain" />
+                ) : running ? (
                   <div className="text-center">
                     <Camera className="mx-auto h-8 w-8 animate-pulse text-primary" />
-                    <p className="mt-2 text-xs text-muted-foreground">Vision agent capturing screen…</p>
+                    <p className="mt-2 text-xs text-muted-foreground">{agentStatus.status === "connected" ? "Agent executing on this machine…" : "Vision agent capturing screen…"}</p>
                     <p className="mt-1 text-sm">{steps[Math.max(currentStep - 1, 0)]?.description}</p>
                   </div>
                 ) : <p className="text-xs text-muted-foreground">Idle</p>}
               </div>
+              {pendingApproval && (
+                <div className="mt-3 flex items-center justify-between rounded-md border border-warning/30 bg-warning/10 p-3 text-xs">
+                  <span>Approve step {pendingApproval.index + 1}: <strong>{steps[pendingApproval.index]?.description}</strong></span>
+                  <div className="flex gap-2">
+                    <Button size="sm" variant="outline" onClick={() => approve(false)}>Skip</Button>
+                    <Button size="sm" onClick={() => approve(true)}>Approve</Button>
+                  </div>
+                </div>
+              )}
             </div>
             <div className="glass rounded-xl p-5">
               <h3 className="mb-3 font-display text-sm font-semibold">Logs</h3>

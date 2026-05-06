@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { Shield, Bell, Cpu, Mic, Cloud } from "lucide-react";
+import { AgentPanel } from "@/components/AgentPanel";
 
 export const Route = createFileRoute("/app/settings/")({ component: SettingsPage });
 
@@ -61,6 +62,7 @@ function SettingsPage() {
           <Button onClick={save} disabled={busy}>{busy ? "Saving…" : "Save"}</Button>
         </div>
       </section>
+      <AgentPanel />
 
       <section className="glass rounded-xl p-6">
         <h2 className="mb-4 font-display text-lg font-semibold">Automation safety</h2>
