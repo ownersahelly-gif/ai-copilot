@@ -165,6 +165,9 @@ class Recorder:
         self.paused = False
         self.ignore_patterns: list[str] = []
         self._lock = threading.Lock()
+        # Track currently-held modifier keys so Cmd+C / Ctrl+V emit shortcuts
+        # instead of being swallowed as typed characters.
+        self._mods: set[str] = set()
 
     def _is_ignored(self, app_name: str, title: str) -> bool:
         if not self.ignore_patterns:
