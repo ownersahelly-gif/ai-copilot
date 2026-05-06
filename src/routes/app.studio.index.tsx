@@ -22,52 +22,82 @@ const ICONS = {
 function Studio() {
   const nav = useNavigate();
   const generate = useServerFn(generateWorkflowFromPrompt);
+  const { status: agentStatus } = useAgentStatus();
+  const agentConnected = agentStatus === "connected";
 
   const [mode, setMode] = useState<"choose" | "demo" | "describe" | "review">("choose");
   const [recording, setRecording] = useState(false);
   const [seconds, setSeconds] = useState(0);
-  const [events, setEvents] = useState<{ type: string; label: string; ts: number }[]>([]);
+  const [events, setEvents] = useState<RecordedEvent[]>([]);
   const [name, setName] = useState("");
   const [desc, setDesc] = useState("");
   const [prompt, setPrompt] = useState("");
   const [steps, setSteps] = useState<WorkflowStep[]>([]);
   const [vars, setVars] = useState<WorkflowVariable[]>([]);
   const [busy, setBusy] = useState(false);
+  const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const startTsRef = useRef(0);
 
-  const startRecording = () => {
-    setRecording(true); setEvents([]); setSeconds(0);
-    const start = Date.now();
-    const sample = ["Click 'File menu'", "Type 'Acme Corp'", "Click 'Submit'", "Scrolled product table", "Switched to Excel", "Selected cell B4", "Copied data", "Switched to browser"];
-    const tick = setInterval(() => {
-      const ms = Date.now() - start;
-      setSeconds(Math.floor(ms / 1000));
-      if (Math.random() < 0.45) {
-        const lbl = sample[Math.floor(Math.random() * sample.length)];
-        setEvents((e) => [...e, { type: lbl.split(" ")[0].toLowerCase(), label: lbl, ts: ms }].slice(-30));
+  // Subscribe to agent events while in demo mode
+  useEffect(() => {
+    if (mode !== "demo") return;
+    const off = agent.onEvent((e) => {
+      if (e.type === "recorded_event") {
+        setEvents((prev) => [...prev, e.event].slice(-200));
+      } else if (e.type === "recording_started") {
+        toast.success("Recording started on your machine");
+      } else if (e.type === "recording_stopped") {
+        // Final batch (in case any tail events were buffered)
+        setEvents((prev) => (e.events?.length ? e.events : prev));
+      } else if (e.type === "error") {
+        toast.error(e.msg);
       }
-    }, 700);
-    (window as unknown as { __rec?: number }).__rec = tick as unknown as number;
+    });
+    return () => { off(); };
+  }, [mode]);
+
+  const startRecording = async () => {
+    if (!agentConnected) {
+      toast.error("Desktop Agent not connected. Open Settings → Desktop Agent first.");
+      return;
+    }
+    try {
+      agent.startRecording();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to start recording");
+      return;
+    }
+    setRecording(true);
+    setEvents([]);
+    setSeconds(0);
+    startTsRef.current = Date.now();
+    tickRef.current = setInterval(() => {
+      setSeconds(Math.floor((Date.now() - startTsRef.current) / 1000));
+    }, 250);
   };
 
   const stopRecording = () => {
     setRecording(false);
-    const t = (window as unknown as { __rec?: number }).__rec;
-    if (t) clearInterval(t as unknown as NodeJS.Timeout);
-    // Convert events to workflow steps
-    const generated: WorkflowStep[] = events.map((e, i) => ({
-      id: `s${i}`,
-      type: (e.type as WorkflowStep["type"]) ?? "click",
-      target: e.label,
-      description: e.label,
-      confidence: 0.85 + Math.random() * 0.14,
-    }));
-    setSteps(generated.length ? generated : [
-      { id: "s1", type: "open_app", target: "Excel", description: "Open Excel", confidence: 0.99 },
-      { id: "s2", type: "navigate", target: "Sheet 1", description: "Open data sheet", confidence: 0.95 },
-      { id: "s3", type: "extract", target: "Column A", description: "Extract product names", confidence: 0.92 },
-    ]);
-    setVars([{ name: "input_file", type: "file", description: "Source file" }]);
-    setName(`Workflow ${new Date().toLocaleString()}`);
+    if (tickRef.current) { clearInterval(tickRef.current); tickRef.current = null; }
+    try { agent.stopRecording(); } catch { /* ignore */ }
+    // Convert real captured events to workflow steps
+    const generated: WorkflowStep[] = events.map((e, i) => {
+      const type: WorkflowStep["type"] =
+        e.kind === "click" ? "click" :
+        e.kind === "type" ? "type" :
+        e.kind === "scroll" ? "scroll" :
+        e.kind === "shortcut" ? "shortcut" : "click";
+      return {
+        id: `s${i}`,
+        type,
+        target: e.label,
+        description: e.label,
+        confidence: 0.9,
+      };
+    });
+    setSteps(generated);
+    setVars([]);
+    setName(`Recording ${new Date().toLocaleString()}`);
     setMode("review");
   };
 
