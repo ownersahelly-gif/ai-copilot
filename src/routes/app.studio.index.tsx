@@ -661,10 +661,17 @@ function Studio() {
             return (
               <li key={s.id} className="flex items-start gap-3 rounded-lg border border-border/60 bg-card/40 p-3">
                 <span className="mt-0.5 grid h-7 w-7 place-items-center rounded-md bg-secondary font-mono text-xs">{i + 1}</span>
-                <Icon className="mt-1.5 h-4 w-4 text-primary" />
+                {s.visualTarget?.thumbnail ? (
+                  <img src={s.visualTarget.thumbnail} alt="" className="h-12 w-12 shrink-0 rounded border border-border/60 object-cover" />
+                ) : (
+                  <Icon className="mt-1.5 h-4 w-4 text-primary" />
+                )}
                 <div className="flex-1 min-w-0">
                   <div className="text-sm">{s.description}</div>
                   <div className="text-[10px] text-muted-foreground">{s.type} · {s.target}</div>
+                  {s.visualTarget?.ocr && (
+                    <div className="mt-0.5 truncate text-[10px] text-accent">OCR: “{s.visualTarget.ocr}”</div>
+                  )}
                 </div>
                 {typeof s.confidence === "number" && (
                   <span className="rounded-full bg-success/10 px-2 py-0.5 text-[10px] text-success">{Math.round(s.confidence * 100)}%</span>
