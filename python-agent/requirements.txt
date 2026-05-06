@@ -5,3 +5,6 @@ pynput>=1.7.6
 # macOS active-window probe (safe no-op on other OSes if missing)
 pyobjc-framework-Cocoa>=10.0; sys_platform == "darwin"
 pyobjc-framework-Quartz>=10.0; sys_platform == "darwin"
+# Screen capture for live preview during execution
+mss>=9.0
+Pillow>=10.0

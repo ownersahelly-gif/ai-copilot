@@ -12,7 +12,7 @@ export type AgentEvent =
   | { type: "auth_ok" }
   | { type: "auth_failed" }
   | { type: "run_started"; runId: string; total: number }
-  | { type: "step_started"; index: number; step: WorkflowStep }
+  | { type: "step_started"; index: number; step: WorkflowStep; screenshot?: string | null }
   | {
       type: "step_done";
       index: number;
