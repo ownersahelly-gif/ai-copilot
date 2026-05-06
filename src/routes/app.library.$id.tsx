@@ -1,7 +1,7 @@
 import { createFileRoute, useParams, useNavigate, Link } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { ArrowLeft, Play, Pause, Square, Camera, MousePointer, Keyboard, Scroll, AppWindow, Sparkles, Loader2, Monitor, MonitorOff } from "lucide-react";
+import { ArrowLeft, Play, Pause, Square, Camera, MousePointer, Keyboard, Scroll, AppWindow, Sparkles, Loader2, Monitor } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
