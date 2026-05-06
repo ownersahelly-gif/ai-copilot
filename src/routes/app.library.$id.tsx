@@ -33,6 +33,38 @@ function WorkflowDetail() {
   const [screenshot, setScreenshot] = useState<string | null>(null);
   const [pendingApproval, setPendingApproval] = useState<{ runId: string; index: number } | null>(null);
   const agentStatus = useAgentStatus();
+  const [livePreview, setLivePreview] = useState(false);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+
+  useEffect(() => {
+    if (!livePreview) {
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+      if (videoRef.current) videoRef.current.srcObject = null;
+      return;
+    }
+    let cancelled = false;
+    navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 15 }, audio: false })
+      .then((stream) => {
+        if (cancelled) { stream.getTracks().forEach((t) => t.stop()); return; }
+        streamRef.current = stream;
+        stream.getVideoTracks()[0]?.addEventListener("ended", () => setLivePreview(false));
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.play().catch(() => {});
+        }
+      })
+      .catch((err) => {
+        toast.error(`Screen share: ${err instanceof Error ? err.message : "permission denied"}`);
+        setLivePreview(false);
+      });
+    return () => {
+      cancelled = true;
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    };
+  }, [livePreview]);
 
   useEffect(() => {
     getWorkflow(id).then((d) => { setW(d); setName(d.name); setDesc(d.description ?? ""); }).catch(() => {});
