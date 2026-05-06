@@ -171,7 +171,7 @@ function Studio() {
   };
 
   // Track outstanding native prompts
-  const pendingPromptsRef = useRef<Map<string, RecordedEvent>>(new Map());
+  
 
   // Subscribe to agent events while in demo mode
   useEffect(() => {
