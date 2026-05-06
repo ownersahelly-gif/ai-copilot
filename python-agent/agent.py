@@ -226,8 +226,36 @@ class Recorder:
         try: ch = key.char
         except AttributeError: ch = None
         name = getattr(key, "name", None)
-        if name in {"cmd", "cmd_l", "cmd_r", "ctrl", "ctrl_l", "ctrl_r", "alt", "alt_l", "alt_r"}:
+
+        # Track modifiers
+        MOD_NAMES = {
+            "cmd": "cmd", "cmd_l": "cmd", "cmd_r": "cmd",
+            "ctrl": "ctrl", "ctrl_l": "ctrl", "ctrl_r": "ctrl",
+            "alt": "alt", "alt_l": "alt", "alt_r": "alt",
+            "shift": "shift", "shift_l": "shift", "shift_r": "shift",
+        }
+        if name in MOD_NAMES:
+            self._mods.add(MOD_NAMES[name])
             return
+
+        # If a modifier is held and a printable char arrives → shortcut
+        active_mods = self._mods - {"shift"}
+        if active_mods and (ch is not None or name):
+            self._flush_typing()
+            label_key = (ch or name or "").lower()
+            combo = "+".join(sorted(active_mods)) + ("+" + label_key if label_key else "")
+            pretty = "+".join(m.capitalize() for m in sorted(active_mods))
+            if label_key:
+                pretty += "+" + label_key.upper()
+            self._emit({
+                "kind": "shortcut",
+                "label": pretty,
+                "combo": combo,
+                "key": label_key,
+                "mods": sorted(active_mods),
+            })
+            return
+
         if ch is not None and ch.isprintable():
             with self._lock:
                 self._typing_buffer.append(ch)
@@ -241,6 +269,16 @@ class Recorder:
         })
 
     def _on_release(self, key):
+        name = getattr(key, "name", None)
+        MOD_NAMES = {
+            "cmd": "cmd", "cmd_l": "cmd", "cmd_r": "cmd",
+            "ctrl": "ctrl", "ctrl_l": "ctrl", "ctrl_r": "ctrl",
+            "alt": "alt", "alt_l": "alt", "alt_r": "alt",
+            "shift": "shift", "shift_l": "shift", "shift_r": "shift",
+        }
+        if name in MOD_NAMES:
+            self._mods.discard(MOD_NAMES[name])
+            return
         if self._typing_buffer and time.monotonic() - self._last_type_ts > 0.8:
             self._flush_typing()
 
