@@ -182,7 +182,20 @@ function Studio() {
           if (isOwnTabEvent(ev, extras)) return;
         }
         const auto = autoExplain(ev);
-        const enriched: RecordedEvent = { ...ev, explanation: auto };
+        // Try to grab a frame of the screen at this moment, with a marker
+        // for click events.
+        let thumb: { url: string; w: number; h: number } | null = null;
+        if (streamRef.current) {
+          const isClick = ev.kind === "click" && typeof ev.x === "number" && typeof ev.y === "number";
+          thumb = isClick ? captureFrame(ev.x!, ev.y!) : captureFrame();
+        }
+        const enriched: RecordedEvent = {
+          ...ev,
+          explanation: auto,
+          thumbnail: thumb?.url,
+          thumbW: thumb?.w,
+          thumbH: thumb?.h,
+        };
         setEvents((prev) => [...prev, enriched].slice(-200));
 
         if (!explainEach || shouldAutoAccept(ev)) return;
