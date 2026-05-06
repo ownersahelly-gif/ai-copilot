@@ -12,6 +12,7 @@ import {
 import { getWorkflow, updateWorkflow, startRun, type Workflow, type WorkflowStep, type WorkflowVariable } from "@/lib/workflows";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
+import { agent, useAgentStatus, type AgentEvent } from "@/lib/agent-bridge";
 
 export const Route = createFileRoute("/app/library/$id")({ component: WorkflowDetail });
 
@@ -29,6 +30,9 @@ function WorkflowDetail() {
   const [running, setRunning] = useState(false);
   const [currentStep, setCurrentStep] = useState(0);
   const [logs, setLogs] = useState<{ ts: string; level: string; msg: string }[]>([]);
+  const [screenshot, setScreenshot] = useState<string | null>(null);
+  const [pendingApproval, setPendingApproval] = useState<{ runId: string; index: number } | null>(null);
+  const agentStatus = useAgentStatus();
 
   useEffect(() => {
     getWorkflow(id).then((d) => { setW(d); setName(d.name); setDesc(d.description ?? ""); }).catch(() => {});
