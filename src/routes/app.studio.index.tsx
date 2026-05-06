@@ -57,7 +57,7 @@ function Studio() {
   const [ignoreSelf, setIgnoreSelf] = useState(true);
   const [extraIgnore, setExtraIgnore] = useState("");
   const [screenOn, setScreenOn] = useState(false);
-  const [explainEach, setExplainEach] = useState(true);
+  const [explainEach, setExplainEach] = useState(false);
   const [pendingEvent, setPendingEvent] = useState<RecordedEvent | null>(null);
   const [pendingExplain, setPendingExplain] = useState("");
 
