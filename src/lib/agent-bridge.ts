@@ -33,6 +33,20 @@ export function setAgentUrl(u: string) { if (hasWindow()) localStorage.setItem(U
 export function getAgentToken(): string { return hasWindow() ? (localStorage.getItem(TOKEN_KEY) || "") : ""; }
 export function setAgentToken(t: string) { if (hasWindow()) localStorage.setItem(TOKEN_KEY, t); }
 
+function getLocalAgentBrowserBlock(url: string): string | null {
+  if (!hasWindow()) return null;
+  const isSecurePreview = window.location.protocol === "https:";
+  const isInsecureAgent = url.trim().startsWith("ws://");
+  const ua = navigator.userAgent;
+  const isSafari = /^((?!chrome|android|crios|fxios).)*safari/i.test(ua);
+
+  if (isSecurePreview && isInsecureAgent && isSafari) {
+    return "Safari blocks ws:// local agents from this secure preview. Open the app in Chrome with the insecure-origin flag enabled, or run the agent with TLS and use wss://127.0.0.1:8765/ws.";
+  }
+
+  return null;
+}
+
 type Listener = (s: AgentStatus, info?: { version?: string; platform?: string; error?: string }) => void;
 type EventListener = (e: AgentEvent) => void;
 
@@ -55,6 +69,11 @@ class AgentBridge {
 
   connect(url = getAgentUrl(), token = getAgentToken()): Promise<void> {
     if (this.ws && (this.status === "connected" || this.status === "connecting" || this.status === "auth")) return Promise.resolve();
+    const browserBlock = getLocalAgentBrowserBlock(url);
+    if (browserBlock) {
+      this.setStatus("error", { error: browserBlock });
+      return Promise.reject(new Error(browserBlock));
+    }
     this.setStatus("connecting", { error: undefined });
     return new Promise((resolve, reject) => {
       let ws: WebSocket;
