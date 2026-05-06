@@ -1,7 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Mic, MicOff, Sparkles, Camera, MousePointer, Keyboard, Scroll, AppWindow, Loader2, Save, ArrowLeft, AlertTriangle, Video, VideoOff } from "lucide-react";
+import { Mic, MicOff, Sparkles, Camera, MousePointer, Keyboard, Scroll, AppWindow, Loader2, Save, ArrowLeft, AlertTriangle, Monitor, MonitorOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
