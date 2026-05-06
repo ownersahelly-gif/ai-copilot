@@ -424,10 +424,8 @@ async def ws_endpoint(ws: WebSocket):
                 await ws.send_json({"type": "screenshot", "data": None})
 
             elif mtype == "run":
-                await ws.send_json({"type": "log", "level": "warn",
-                    "msg": "Workflow execution not wired in this build."})
-                await ws.send_json({"type": "run_finished",
-                    "runId": msg.get("runId", ""), "ok": False})
+                asyncio.create_task(execute_run(ws, recorder, msg))
+
 
     except WebSocketDisconnect:
         pass
