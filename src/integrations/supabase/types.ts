@@ -14,7 +14,164 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      chat_messages: {
+        Row: {
+          content: string
+          conversation_id: string
+          created_at: string
+          id: string
+          role: string
+          user_id: string
+        }
+        Insert: {
+          content: string
+          conversation_id?: string
+          created_at?: string
+          id?: string
+          role: string
+          user_id: string
+        }
+        Update: {
+          content?: string
+          conversation_id?: string
+          created_at?: string
+          id?: string
+          role?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      profiles: {
+        Row: {
+          avatar_url: string | null
+          created_at: string
+          display_name: string | null
+          id: string
+          updated_at: string
+        }
+        Insert: {
+          avatar_url?: string | null
+          created_at?: string
+          display_name?: string | null
+          id: string
+          updated_at?: string
+        }
+        Update: {
+          avatar_url?: string | null
+          created_at?: string
+          display_name?: string | null
+          id?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      workflow_runs: {
+        Row: {
+          current_step: number
+          error: string | null
+          finished_at: string | null
+          id: string
+          inputs: Json
+          logs: Json
+          mode: string
+          started_at: string
+          status: string
+          total_steps: number
+          user_id: string
+          workflow_id: string
+        }
+        Insert: {
+          current_step?: number
+          error?: string | null
+          finished_at?: string | null
+          id?: string
+          inputs?: Json
+          logs?: Json
+          mode?: string
+          started_at?: string
+          status?: string
+          total_steps?: number
+          user_id: string
+          workflow_id: string
+        }
+        Update: {
+          current_step?: number
+          error?: string | null
+          finished_at?: string | null
+          id?: string
+          inputs?: Json
+          logs?: Json
+          mode?: string
+          started_at?: string
+          status?: string
+          total_steps?: number
+          user_id?: string
+          workflow_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "workflow_runs_workflow_id_fkey"
+            columns: ["workflow_id"]
+            isOneToOne: false
+            referencedRelation: "workflows"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      workflows: {
+        Row: {
+          app_targets: string[]
+          created_at: string
+          description: string | null
+          id: string
+          is_favorite: boolean
+          last_run_at: string | null
+          name: string
+          run_count: number
+          status: string
+          steps: Json
+          tags: string[]
+          thumbnail_url: string | null
+          updated_at: string
+          user_id: string
+          variables: Json
+        }
+        Insert: {
+          app_targets?: string[]
+          created_at?: string
+          description?: string | null
+          id?: string
+          is_favorite?: boolean
+          last_run_at?: string | null
+          name: string
+          run_count?: number
+          status?: string
+          steps?: Json
+          tags?: string[]
+          thumbnail_url?: string | null
+          updated_at?: string
+          user_id: string
+          variables?: Json
+        }
+        Update: {
+          app_targets?: string[]
+          created_at?: string
+          description?: string | null
+          id?: string
+          is_favorite?: boolean
+          last_run_at?: string | null
+          name?: string
+          run_count?: number
+          status?: string
+          steps?: Json
+          tags?: string[]
+          thumbnail_url?: string | null
+          updated_at?: string
+          user_id?: string
+          variables?: Json
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
