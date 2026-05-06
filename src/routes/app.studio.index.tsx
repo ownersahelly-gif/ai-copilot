@@ -64,6 +64,41 @@ function Studio() {
   const startTsRef = useRef(0);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  // Capture a frame from the live screen-share, optionally drawing a marker
+  // at (markX, markY) which are in physical pixels of the captured display.
+  const captureFrame = (markX?: number, markY?: number): { url: string; w: number; h: number } | null => {
+    const video = videoRef.current;
+    if (!video || !video.videoWidth || !video.videoHeight) return null;
+    const w = video.videoWidth, h = video.videoHeight;
+    const canvas = canvasRef.current ?? document.createElement("canvas");
+    canvasRef.current = canvas;
+    canvas.width = w; canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+    ctx.drawImage(video, 0, 0, w, h);
+    if (typeof markX === "number" && typeof markY === "number") {
+      const r = Math.max(14, Math.min(w, h) * 0.012);
+      // Outer halo
+      ctx.beginPath();
+      ctx.fillStyle = "rgba(255, 64, 96, 0.25)";
+      ctx.arc(markX, markY, r * 2.2, 0, Math.PI * 2);
+      ctx.fill();
+      // Inner ring
+      ctx.beginPath();
+      ctx.lineWidth = Math.max(3, r * 0.4);
+      ctx.strokeStyle = "rgba(255, 64, 96, 0.95)";
+      ctx.arc(markX, markY, r, 0, Math.PI * 2);
+      ctx.stroke();
+      // Center dot
+      ctx.beginPath();
+      ctx.fillStyle = "white";
+      ctx.arc(markX, markY, Math.max(2, r * 0.25), 0, Math.PI * 2);
+      ctx.fill();
+    }
+    return { url: canvas.toDataURL("image/jpeg", 0.7), w, h };
+  };
 
   // Screen-share preview lifecycle
   useEffect(() => {
