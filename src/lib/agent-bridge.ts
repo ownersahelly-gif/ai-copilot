@@ -101,6 +101,9 @@ export const agent = new AgentBridge();
 import { useEffect, useState } from "react";
 export function useAgentStatus() {
   const [s, setS] = useState<{ status: AgentStatus; info: typeof agent.info }>({ status: agent.status, info: agent.info });
-  useEffect(() => agent.onStatus((status, info) => setS({ status, info: info ?? {} })), []);
+  useEffect(() => {
+    const off = agent.onStatus((status, info) => setS({ status, info: info ?? {} }));
+    return () => { off(); };
+  }, []);
   return s;
 }
