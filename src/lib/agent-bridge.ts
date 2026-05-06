@@ -29,6 +29,7 @@ export type AgentEvent =
   | { type: "recorded_event"; event: RecordedEvent }
   | { type: "log"; level: "info" | "warn" | "error" | "success"; msg: string }
   | { type: "error"; msg: string }
+  | { type: "prompt_result"; id: string; ok: boolean; text: string }
   | { type: "pong" };
 
 export type RecordedEvent = {
