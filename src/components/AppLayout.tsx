@@ -10,7 +10,8 @@ import { supabase } from "@/integrations/supabase/client";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { motion } from "framer-motion";
 
-const NAV = [
+type NavItem = { to: string; label: string; icon: typeof LayoutDashboard; exact?: boolean };
+const NAV: NavItem[] = [
   { to: "/app", label: "Dashboard", icon: LayoutDashboard, exact: true },
   { to: "/app/library", label: "Workflow Library", icon: Library },
   { to: "/app/studio", label: "Recording Studio", icon: Mic },
@@ -18,7 +19,7 @@ const NAV = [
   { to: "/app/history", label: "History & Logs", icon: History },
   { to: "/app/assistant", label: "AI Assistant", icon: MessageSquareText },
   { to: "/app/settings", label: "Settings", icon: Settings },
-] as const;
+];
 
 export function AppLayout() {
   const { user, loading } = useAuth();
