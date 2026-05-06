@@ -219,6 +219,12 @@ class AgentBridge {
   requestScreenshot() {
     this.send({ type: "screenshot" });
   }
+  startRecording() {
+    this.send({ type: "start_recording" });
+  }
+  stopRecording() {
+    this.send({ type: "stop_recording" });
+  }
 }
 
 export const agent = new AgentBridge();
