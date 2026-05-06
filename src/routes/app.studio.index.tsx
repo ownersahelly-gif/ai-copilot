@@ -1,7 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Mic, MicOff, Sparkles, Camera, MousePointer, Keyboard, Scroll, AppWindow, Loader2, Save, ArrowLeft, AlertTriangle, Video, VideoOff } from "lucide-react";
+import { Mic, MicOff, Sparkles, Camera, MousePointer, Keyboard, Scroll, AppWindow, Loader2, Save, ArrowLeft, AlertTriangle, Monitor, MonitorOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -55,7 +55,7 @@ function Studio() {
   // New: ignore-own-tab + webcam + explain-each-step
   const [ignoreSelf, setIgnoreSelf] = useState(true);
   const [extraIgnore, setExtraIgnore] = useState("");
-  const [webcamOn, setWebcamOn] = useState(false);
+  const [screenOn, setScreenOn] = useState(false);
   const [explainEach, setExplainEach] = useState(true);
   const [pendingEvent, setPendingEvent] = useState<RecordedEvent | null>(null);
   const [pendingExplain, setPendingExplain] = useState("");
@@ -65,34 +65,36 @@ function Studio() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
-  // Webcam lifecycle
+  // Screen-share preview lifecycle
   useEffect(() => {
-    if (!webcamOn) {
+    if (!screenOn) {
       streamRef.current?.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
       if (videoRef.current) videoRef.current.srcObject = null;
       return;
     }
     let cancelled = false;
-    navigator.mediaDevices.getUserMedia({ video: { width: 320, height: 240 }, audio: false })
+    navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 15 }, audio: false })
       .then((stream) => {
         if (cancelled) { stream.getTracks().forEach((t) => t.stop()); return; }
         streamRef.current = stream;
+        // If the user clicks the browser's "Stop sharing" button
+        stream.getVideoTracks()[0]?.addEventListener("ended", () => setScreenOn(false));
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
           videoRef.current.play().catch(() => {});
         }
       })
       .catch((err) => {
-        toast.error(`Webcam: ${err instanceof Error ? err.message : "permission denied"}`);
-        setWebcamOn(false);
+        toast.error(`Screen share: ${err instanceof Error ? err.message : "permission denied"}`);
+        setScreenOn(false);
       });
     return () => {
       cancelled = true;
       streamRef.current?.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
     };
-  }, [webcamOn]);
+  }, [screenOn]);
 
   // Subscribe to agent events while in demo mode
   useEffect(() => {
@@ -300,13 +302,13 @@ function Studio() {
             </div>
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2">
-                {webcamOn ? <Video className="h-4 w-4 text-primary" /> : <VideoOff className="h-4 w-4 text-muted-foreground" />}
+                {screenOn ? <Monitor className="h-4 w-4 text-primary" /> : <MonitorOff className="h-4 w-4 text-muted-foreground" />}
                 <div>
-                  <Label className="text-xs">Webcam reference</Label>
-                  <p className="text-[10px] text-muted-foreground">Small live tile while you record.</p>
+                  <Label className="text-xs">Live screen preview</Label>
+                  <p className="text-[10px] text-muted-foreground">Shares your screen back into this panel as a reference.</p>
                 </div>
               </div>
-              <Switch checked={webcamOn} onCheckedChange={setWebcamOn} />
+              <Switch checked={screenOn} onCheckedChange={setScreenOn} />
             </div>
             {ignoreSelf && (
               <div className="sm:col-span-3">
@@ -330,21 +332,20 @@ function Studio() {
                 {recording ? (pendingEvent ? "Paused — waiting for your explanation" : "Recording — perform the task naturally") : "Idle"}
               </div>
               <div className="relative grid h-[260px] place-items-center overflow-hidden rounded-lg border border-dashed border-border/60 bg-background/40">
-                {recording ? (
+                {screenOn ? (
+                  <video
+                    ref={videoRef}
+                    muted
+                    playsInline
+                    className="h-full w-full object-contain bg-black"
+                  />
+                ) : recording ? (
                   <div className="text-center">
                     <Camera className="mx-auto h-10 w-10 animate-pulse text-primary" />
                     <p className="mt-3 text-sm text-muted-foreground">Vision agent is observing your screen…</p>
                   </div>
                 ) : (
                   <p className="text-sm text-muted-foreground">Press <span className="text-foreground">Start recording</span> when ready.</p>
-                )}
-                {webcamOn && (
-                  <video
-                    ref={videoRef}
-                    muted
-                    playsInline
-                    className="absolute bottom-3 right-3 h-24 w-32 rounded-md border border-border/70 bg-black object-cover shadow-lg"
-                  />
                 )}
               </div>
             </div>
