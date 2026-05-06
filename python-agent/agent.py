@@ -491,7 +491,9 @@ async def execute_run(ws: WebSocket, recorder: "Recorder", msg: dict) -> None:
                     await ws.send_json({"type": "log", "level": "warn",
                         "msg": f"  step type '{stype}' not implemented — skipped"})
 
-                await ws.send_json({"type": "step_done", "index": i, "ok": True})
+                after_b64 = _grab_screen()
+                await ws.send_json({"type": "step_done", "index": i, "ok": True,
+                                    "screenshot": after_b64})
                 await asyncio.sleep(0.35)
 
             except Exception as ex:
