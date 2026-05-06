@@ -1,288 +1,214 @@
 """
-EchoPilot Desktop Agent
-=======================
-Local FastAPI + WebSocket server that executes workflow steps on this machine.
-The EchoPilot web app connects to ws://localhost:8765/ws and streams steps;
-the agent runs them with PyAutoGUI / Playwright / mss / pytesseract and streams
-back live status, screenshots and OCR results.
+EchoPilot Desktop Agent — local sidecar.
+Runs a WebSocket server on ws://127.0.0.1:8765/ws that the EchoPilot web app
+connects to. Authenticates with a pairing token and (now) captures REAL
+mouse + keyboard input via pynput when the UI requests recording.
 
-Quick start:
-    python -m venv .venv && source .venv/bin/activate   # (Windows: .venv\\Scripts\\activate)
+Run:
+    python -m venv .venv
+    source .venv/bin/activate          # Windows: .venv\\Scripts\\activate
     pip install -r requirements.txt
-    playwright install chromium                          # only if you use browser steps
     python agent.py
 
-By default the agent binds to 127.0.0.1 only. Pair it with a one-time token
-printed to your terminal — the web app will ask you to paste it once.
+On macOS you must grant the Terminal (or your Python binary) the
+"Accessibility" and "Input Monitoring" permissions in
+System Settings → Privacy & Security, otherwise pynput cannot see global
+input events.
 """
 from __future__ import annotations
 
 import asyncio
-import base64
-import io
 import json
-import os
 import platform
 import secrets
-import sys
+import threading
 import time
-from dataclasses import dataclass, field
-from typing import Any, Optional
+from pathlib import Path
+from typing import Any
 
+import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
 
-# ---- Optional heavy deps: only imported when actually needed ---------------
+try:
+    from pynput import mouse, keyboard  # type: ignore
+    HAVE_PYNPUT = True
+except Exception as e:  # pragma: no cover
+    print(f"[agent] pynput unavailable: {e!r} — recording will be disabled")
+    HAVE_PYNPUT = False
 
-def _lazy_import(name: str):
+VERSION = "0.2.0"
+HOST = "127.0.0.1"
+PORT = 8765
+
+TOKEN_FILE = Path.home() / ".echopilot_token"
+
+
+def get_or_create_token() -> str:
+    if TOKEN_FILE.exists():
+        return TOKEN_FILE.read_text().strip()
+    tok = secrets.token_urlsafe(9)
+    TOKEN_FILE.write_text(tok)
     try:
-        return __import__(name)
-    except Exception as e:  # pragma: no cover
-        print(f"[agent] '{name}' not available: {e}", file=sys.stderr)
-        return None
+        TOKEN_FILE.chmod(0o600)
+    except Exception:
+        pass
+    return tok
 
 
-VERSION = "0.1.0"
-HOST = os.environ.get("ECHOPILOT_HOST", "127.0.0.1")
-PORT = int(os.environ.get("ECHOPILOT_PORT", "8765"))
-PAIRING_TOKEN = os.environ.get("ECHOPILOT_TOKEN") or secrets.token_urlsafe(8)
-ALLOW_ORIGINS = os.environ.get(
-    "ECHOPILOT_ORIGINS",
-    "https://*.lovable.app,https://*.lovableproject.com,http://localhost:5173,http://localhost:3000",
-).split(",")
+# -------------------- Recorder --------------------
+class Recorder:
+    """
+    Captures real OS input via pynput. Posts events into an asyncio.Queue
+    that the websocket task drains and forwards to the browser.
+    """
 
-# ---------------------------------------------------------------------------
+    def __init__(self, loop: asyncio.AbstractEventLoop, queue: asyncio.Queue):
+        self.loop = loop
+        self.queue = queue
+        self._mouse_listener: Any = None
+        self._kb_listener: Any = None
+        self._typing_buffer: list[str] = []
+        self._last_type_ts = 0.0
+        self._start_ts = 0.0
+        self.active = False
+        self._lock = threading.Lock()
 
-app = FastAPI(title="EchoPilot Agent", version=VERSION)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+    # ---- helpers ----
+    def _emit(self, ev: dict) -> None:
+        ev["ts"] = int((time.monotonic() - self._start_ts) * 1000)
+        # Hand off to the asyncio loop in a thread-safe way
+        self.loop.call_soon_threadsafe(self.queue.put_nowait, ev)
 
+    def _flush_typing(self) -> None:
+        with self._lock:
+            if not self._typing_buffer:
+                return
+            text = "".join(self._typing_buffer)
+            self._typing_buffer.clear()
+        self._emit({
+            "kind": "type",
+            "label": f"Type {text!r}" if len(text) <= 40 else f"Type {text[:37]!r}…",
+            "text": text,
+        })
 
-class WorkflowStep(BaseModel):
-    id: Optional[str] = None
-    type: str
-    target: str = ""
-    value: Optional[str] = None
-    description: str = ""
-
-
-@dataclass
-class Session:
-    ws: WebSocket
-    paused: bool = False
-    cancelled: bool = False
-    inputs: dict = field(default_factory=dict)
-
-
-# ---- Executors -------------------------------------------------------------
-
-class DesktopExecutor:
-    def __init__(self):
-        self.pg = _lazy_import("pyautogui")
-        self.mss = _lazy_import("mss")
-        if self.pg:
-            self.pg.FAILSAFE = True
-            self.pg.PAUSE = 0.05
-
-    def screenshot_b64(self) -> Optional[str]:
-        if not self.mss:
-            return None
-        from PIL import Image  # type: ignore
-        with self.mss.mss() as sct:
-            mon = sct.monitors[1]
-            raw = sct.grab(mon)
-            img = Image.frombytes("RGB", raw.size, raw.rgb)
-            # Downscale aggressively for streaming
-            img.thumbnail((1280, 800))
-            buf = io.BytesIO()
-            img.save(buf, format="JPEG", quality=55)
-            return base64.b64encode(buf.getvalue()).decode("ascii")
-
-    def ocr(self, region=None) -> str:
-        try:
-            import pytesseract  # type: ignore
-            from PIL import ImageGrab  # type: ignore
-            img = ImageGrab.grab(bbox=region)
-            return pytesseract.image_to_string(img)
-        except Exception as e:
-            return f"<ocr unavailable: {e}>"
-
-    async def run_step(self, step: WorkflowStep) -> dict:
-        pg = self.pg
-        if pg is None:
-            return {"ok": False, "error": "pyautogui not installed"}
-
-        t = step.type
-        try:
-            if t == "click":
-                # target may be "x,y"
-                if "," in step.target:
-                    x, y = [int(v.strip()) for v in step.target.split(",", 1)]
-                    pg.click(x, y)
-                else:
-                    pg.click()
-                return {"ok": True}
-            if t == "type":
-                pg.typewrite(step.value or step.target, interval=0.02)
-                return {"ok": True}
-            if t == "shortcut":
-                keys = [k.strip().lower() for k in (step.target or step.value or "").split("+") if k.strip()]
-                if keys:
-                    pg.hotkey(*keys)
-                return {"ok": True}
-            if t == "scroll":
-                amt = int(step.value or "-300")
-                pg.scroll(amt)
-                return {"ok": True}
-            if t == "drag":
-                # "x1,y1 -> x2,y2"
-                parts = step.target.replace("->", ",").split(",")
-                x1, y1, x2, y2 = [int(p.strip()) for p in parts[:4]]
-                pg.moveTo(x1, y1); pg.dragTo(x2, y2, duration=0.4)
-                return {"ok": True}
-            if t == "wait":
-                await asyncio.sleep(float(step.value or "1"))
-                return {"ok": True}
-            if t == "screenshot":
-                return {"ok": True, "screenshot": self.screenshot_b64()}
-            if t == "extract":
-                return {"ok": True, "text": self.ocr()}
-            if t == "open_app":
-                _open_application(step.target)
-                return {"ok": True}
-            return {"ok": False, "error": f"Unsupported desktop step: {t}"}
-        except Exception as e:
-            return {"ok": False, "error": str(e)}
-
-
-class BrowserExecutor:
-    """Lazy Playwright wrapper. Browser launches on first use."""
-
-    def __init__(self):
-        self._pw = None
-        self._browser = None
-        self._page = None
-
-    async def _ensure(self):
-        if self._page:
+    # ---- listener callbacks ----
+    def _on_click(self, x, y, button, pressed):
+        if not pressed:
             return
-        from playwright.async_api import async_playwright  # type: ignore
-        self._pw = await async_playwright().start()
-        self._browser = await self._pw.chromium.launch(headless=False)
-        self._page = await self._browser.new_page()
+        self._flush_typing()
+        btn = str(button).split(".")[-1]
+        self._emit({
+            "kind": "click",
+            "label": f"Click ({int(x)}, {int(y)}) [{btn}]",
+            "x": int(x), "y": int(y), "button": btn,
+        })
 
-    async def screenshot_b64(self) -> Optional[str]:
-        if not self._page:
-            return None
-        png = await self._page.screenshot(full_page=False, type="jpeg", quality=55)
-        return base64.b64encode(png).decode("ascii")
+    def _on_scroll(self, x, y, dx, dy):
+        self._flush_typing()
+        direction = "down" if dy < 0 else "up" if dy > 0 else ("right" if dx > 0 else "left")
+        self._emit({
+            "kind": "scroll",
+            "label": f"Scroll {direction}",
+            "x": int(x), "y": int(y),
+        })
 
-    async def run_step(self, step: WorkflowStep) -> dict:
+    def _on_press(self, key):
         try:
-            await self._ensure()
-            page = self._page
-            assert page is not None
-            t = step.type
-            if t == "navigate":
-                await page.goto(step.target, wait_until="domcontentloaded")
-                return {"ok": True, "screenshot": await self.screenshot_b64()}
-            if t == "click":
-                await page.click(step.target)
-                return {"ok": True}
-            if t == "type":
-                await page.fill(step.target, step.value or "")
-                return {"ok": True}
-            if t == "extract":
-                txt = await page.locator(step.target or "body").inner_text()
-                return {"ok": True, "text": txt[:4000]}
-            if t == "screenshot":
-                return {"ok": True, "screenshot": await self.screenshot_b64()}
-            if t == "wait":
-                await asyncio.sleep(float(step.value or "1"))
-                return {"ok": True}
-            if t == "scroll":
-                await page.mouse.wheel(0, int(step.value or "400"))
-                return {"ok": True}
-            return {"ok": False, "error": f"Unsupported browser step: {t}"}
-        except Exception as e:
-            return {"ok": False, "error": str(e)}
+            ch = key.char  # printable
+        except AttributeError:
+            ch = None
+        name = getattr(key, "name", None)
 
-    async def close(self):
+        # Modifier-shortcut detection
+        if name in {"cmd", "cmd_l", "cmd_r", "ctrl", "ctrl_l", "ctrl_r", "alt", "alt_l", "alt_r"}:
+            self._modifier_held = name
+            return
+
+        if ch is not None and ch.isprintable():
+            with self._lock:
+                self._typing_buffer.append(ch)
+                self._last_type_ts = time.monotonic()
+            return
+
+        # Non-printable key (Enter, Tab, Esc, arrows, etc.)
+        self._flush_typing()
+        self._emit({
+            "kind": "key",
+            "label": f"Press {name or str(key)}",
+            "key": name or str(key),
+        })
+
+    def _on_release(self, key):
+        # If user pauses typing >800ms, flush
+        if self._typing_buffer and time.monotonic() - self._last_type_ts > 0.8:
+            self._flush_typing()
+
+    # ---- public API ----
+    def start(self) -> bool:
+        if not HAVE_PYNPUT:
+            return False
+        if self.active:
+            return True
+        self._start_ts = time.monotonic()
+        self._typing_buffer.clear()
+        self._mouse_listener = mouse.Listener(
+            on_click=self._on_click, on_scroll=self._on_scroll,
+        )
+        self._kb_listener = keyboard.Listener(
+            on_press=self._on_press, on_release=self._on_release,
+        )
+        self._mouse_listener.start()
+        self._kb_listener.start()
+        self.active = True
+        return True
+
+    def stop(self) -> None:
+        if not self.active:
+            return
+        self.active = False
+        self._flush_typing()
         try:
-            if self._browser:
-                await self._browser.close()
-            if self._pw:
-                await self._pw.stop()
-        finally:
-            self._pw = self._browser = self._page = None
+            self._mouse_listener and self._mouse_listener.stop()
+        except Exception:
+            pass
+        try:
+            self._kb_listener and self._kb_listener.stop()
+        except Exception:
+            pass
+        self._mouse_listener = None
+        self._kb_listener = None
 
 
-def _open_application(name: str):
-    import subprocess
-    sysname = platform.system()
-    if sysname == "Darwin":
-        subprocess.Popen(["open", "-a", name])
-    elif sysname == "Windows":
-        subprocess.Popen(["cmd", "/c", "start", "", name], shell=False)
-    else:
-        subprocess.Popen([name])
-
-
-desktop = DesktopExecutor()
-browser = BrowserExecutor()
-
-
-# ---- HTTP info endpoint ----------------------------------------------------
-
-@app.get("/info")
-async def info():
-    return {
-        "name": "EchoPilot Agent",
-        "version": VERSION,
-        "platform": platform.platform(),
-        "python": sys.version.split()[0],
-        "pyautogui": bool(desktop.pg),
-        "ocr": _lazy_import("pytesseract") is not None,
-    }
-
-
-# ---- WebSocket protocol ----------------------------------------------------
-# Client -> Server messages:
-#   {type:"auth", token:"..."}
-#   {type:"run", runId, mode, inputs, steps:[...]}
-#   {type:"pause"} {type:"resume"} {type:"cancel"}
-#   {type:"screenshot"}                      -- one-shot screen capture
-#   {type:"step_response", approve:bool}     -- for step-approval mode
-#
-# Server -> Client messages:
-#   {type:"hello", version, platform}
-#   {type:"auth_ok"} | {type:"auth_failed"}
-#   {type:"run_started", runId, total}
-#   {type:"step_started", index, step}
-#   {type:"step_done", index, ok, error?, screenshot?, text?}
-#   {type:"awaiting_approval", index, step}
-#   {type:"run_finished", runId, ok}
-#   {type:"log", level, msg}
-#   {type:"error", msg}
-
-approval_event: dict[str, asyncio.Event] = {}
-approval_result: dict[str, bool] = {}
+# -------------------- WebSocket server --------------------
+app = FastAPI()
+TOKEN = get_or_create_token()
 
 
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket):
     await ws.accept()
-    await ws.send_json({"type": "hello", "version": VERSION, "platform": platform.platform(), "needs_auth": True})
-
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue = asyncio.Queue()
+    recorder = Recorder(loop, queue)
     authed = False
-    sess = Session(ws=ws)
-    current_run: Optional[asyncio.Task] = None
+
+    await ws.send_json({
+        "type": "hello",
+        "version": VERSION,
+        "platform": f"{platform.system()}-{platform.release()}-{platform.machine()}-{platform.architecture()[0]}",
+        "needs_auth": True,
+    })
+
+    async def pump_events():
+        """Forward recorded events to the browser as they happen."""
+        while True:
+            ev = await queue.get()
+            try:
+                await ws.send_json({"type": "recorded_event", "event": ev})
+            except Exception:
+                return
+
+    pump_task: asyncio.Task | None = None
 
     try:
         while True:
@@ -290,126 +216,71 @@ async def ws_endpoint(ws: WebSocket):
             try:
                 msg = json.loads(raw)
             except Exception:
-                await ws.send_json({"type": "error", "msg": "invalid json"})
                 continue
-
             mtype = msg.get("type")
 
-            if not authed:
-                if mtype == "auth":
-                    if msg.get("token") == PAIRING_TOKEN:
-                        authed = True
-                        await ws.send_json({"type": "auth_ok"})
-                    else:
-                        await ws.send_json({"type": "auth_failed"})
-                        await ws.close(); return
+            if mtype == "auth":
+                if msg.get("token") == TOKEN:
+                    authed = True
+                    await ws.send_json({"type": "auth_ok"})
+                    pump_task = asyncio.create_task(pump_events())
                 else:
                     await ws.send_json({"type": "auth_failed"})
-                    await ws.close(); return
+                continue
+
+            if not authed:
                 continue
 
             if mtype == "ping":
                 await ws.send_json({"type": "pong"})
-            elif mtype == "screenshot":
-                await ws.send_json({"type": "screenshot", "data": desktop.screenshot_b64()})
-            elif mtype == "pause":
-                sess.paused = True
-            elif mtype == "resume":
-                sess.paused = False
-            elif mtype == "cancel":
-                sess.cancelled = True
-                if current_run: current_run.cancel()
-            elif mtype == "step_response":
-                ev = approval_event.get(msg.get("runId", ""))
-                if ev:
-                    approval_result[msg["runId"]] = bool(msg.get("approve"))
-                    ev.set()
-            elif mtype == "run":
-                if current_run and not current_run.done():
-                    await ws.send_json({"type": "error", "msg": "another run is already in progress"})
+
+            elif mtype == "start_recording":
+                if not HAVE_PYNPUT:
+                    await ws.send_json({
+                        "type": "error",
+                        "msg": "pynput is not installed in the agent venv. Run: pip install -r requirements.txt",
+                    })
                     continue
-                sess.cancelled = False; sess.paused = False
-                sess.inputs = msg.get("inputs") or {}
-                steps = [WorkflowStep(**s) for s in msg.get("steps", [])]
-                run_id = msg.get("runId") or secrets.token_hex(6)
-                mode = msg.get("mode", "auto")
-                current_run = asyncio.create_task(_execute_run(sess, run_id, mode, steps))
-            else:
-                await ws.send_json({"type": "error", "msg": f"unknown message: {mtype}"})
+                ok = recorder.start()
+                if ok:
+                    await ws.send_json({"type": "recording_started"})
+                    await ws.send_json({"type": "log", "level": "info",
+                                        "msg": "Recording real mouse + keyboard input"})
+                else:
+                    await ws.send_json({"type": "error", "msg": "Failed to start recorder"})
+
+            elif mtype == "stop_recording":
+                recorder.stop()
+                await ws.send_json({"type": "recording_stopped", "events": []})
+
+            elif mtype == "screenshot":
+                # Optional: implement with mss if you want screenshots
+                await ws.send_json({"type": "screenshot", "data": None})
+
+            elif mtype == "run":
+                # Workflow execution would go here. Not implemented in this build.
+                await ws.send_json({"type": "log", "level": "warn",
+                                    "msg": "Workflow execution is not yet wired in this agent build."})
+                await ws.send_json({"type": "run_finished",
+                                    "runId": msg.get("runId", ""), "ok": False})
 
     except WebSocketDisconnect:
-        if current_run: current_run.cancel()
+        pass
     finally:
-        await browser.close()
+        recorder.stop()
+        if pump_task:
+            pump_task.cancel()
 
-
-async def _execute_run(sess: Session, run_id: str, mode: str, steps: list[WorkflowStep]):
-    ws = sess.ws
-    await ws.send_json({"type": "run_started", "runId": run_id, "total": len(steps)})
-    ok_all = True
-    for i, step in enumerate(steps):
-        if sess.cancelled:
-            await ws.send_json({"type": "log", "level": "warn", "msg": "Run cancelled by user"})
-            ok_all = False; break
-        while sess.paused and not sess.cancelled:
-            await asyncio.sleep(0.2)
-
-        # Resolve {{var}} placeholders from inputs
-        step = _resolve_vars(step, sess.inputs)
-
-        # Step approval
-        if mode == "step":
-            ev = asyncio.Event()
-            approval_event[run_id] = ev
-            await ws.send_json({"type": "awaiting_approval", "index": i, "step": step.model_dump()})
-            try:
-                await asyncio.wait_for(ev.wait(), timeout=300)
-            except asyncio.TimeoutError:
-                await ws.send_json({"type": "log", "level": "warn", "msg": "Approval timed out"})
-                ok_all = False; break
-            approved = approval_result.pop(run_id, False)
-            approval_event.pop(run_id, None)
-            if not approved:
-                await ws.send_json({"type": "log", "level": "warn", "msg": f"Step {i+1} rejected"})
-                ok_all = False; break
-
-        await ws.send_json({"type": "step_started", "index": i, "step": step.model_dump()})
-
-        is_browser = step.type == "navigate" or (step.target or "").startswith(("http://", "https://", "css=", "text=", "//"))
-        executor = browser if is_browser else desktop
-        result = await executor.run_step(step) if asyncio.iscoroutinefunction(executor.run_step) else executor.run_step(step)
-        if asyncio.iscoroutine(result):
-            result = await result
-
-        await ws.send_json({"type": "step_done", "index": i, **result})
-        if not result.get("ok"):
-            ok_all = False
-            await ws.send_json({"type": "log", "level": "error", "msg": f"Step {i+1} failed: {result.get('error')}"})
-            break
-
-    await ws.send_json({"type": "run_finished", "runId": run_id, "ok": ok_all})
-
-
-def _resolve_vars(step: WorkflowStep, inputs: dict) -> WorkflowStep:
-    def sub(s: Optional[str]) -> Optional[str]:
-        if not s or "{{" not in s: return s
-        out = s
-        for k, v in inputs.items():
-            out = out.replace("{{" + k + "}}", str(v))
-        return out
-    return step.model_copy(update={"target": sub(step.target) or "", "value": sub(step.value)})
-
-
-# ---- Entrypoint ------------------------------------------------------------
 
 def main():
-    import uvicorn
     print("=" * 60)
     print(f" EchoPilot Desktop Agent v{VERSION}")
-    print(f" Listening on   ws://{HOST}:{PORT}/ws")
-    print(f" Pairing token  {PAIRING_TOKEN}")
-    print(" Open the EchoPilot web app -> Settings -> Connect Agent")
-    print(" Paste the token above to pair this machine.")
+    print(f" Listening on ws://{HOST}:{PORT}/ws")
+    print(f" Pairing token: {TOKEN}")
+    print(f" pynput available: {HAVE_PYNPUT}")
+    if not HAVE_PYNPUT:
+        print(" -> Install with: pip install -r requirements.txt")
+    print(" macOS: grant Terminal Accessibility + Input Monitoring permissions")
     print("=" * 60)
     uvicorn.run(app, host=HOST, port=PORT, log_level="warning")
 
