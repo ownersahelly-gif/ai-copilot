@@ -4,6 +4,12 @@ import type { Database } from "@/integrations/supabase/types";
 export type Workflow = Database["public"]["Tables"]["workflows"]["Row"];
 export type WorkflowRun = Database["public"]["Tables"]["workflow_runs"]["Row"];
 
+export type VisualTarget = {
+  description: string;          // "the green Save button in the top toolbar"
+  thumbnail?: string;           // cropped data-URL of the element area (for visual matching)
+  ocr?: string;                 // any text the model read on/near the element
+};
+
 export type WorkflowStep = {
   id: string;
   type: "click" | "type" | "scroll" | "screenshot" | "open_app" | "navigate" | "drag" | "shortcut" | "wait" | "extract";
@@ -11,6 +17,7 @@ export type WorkflowStep = {
   value?: string;
   description: string;
   confidence?: number;
+  visualTarget?: VisualTarget;
 };
 
 export type WorkflowVariable = {
