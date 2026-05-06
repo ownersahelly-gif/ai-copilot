@@ -96,27 +96,90 @@ function Studio() {
     };
   }, [screenOn]);
 
+  // Smart auto-explanation per event kind & app context
+  const autoExplain = (e: RecordedEvent): string => {
+    const appCtx = e.app ? ` in ${e.app}` : "";
+    if (e.kind === "scroll") return `Scroll ${e.label.replace(/^Scroll\s+/i, "")}${appCtx} to bring more content into view.`;
+    if (e.kind === "type" && e.text) return `Type "${e.text}"${appCtx}.`;
+    if (e.kind === "key" && e.key) {
+      const k = e.key.toLowerCase();
+      if (k.includes("enter")) return `Press Enter${appCtx} to confirm.`;
+      if (k.includes("tab")) return `Press Tab${appCtx} to move to the next field.`;
+      if (k.includes("esc")) return `Press Escape${appCtx} to dismiss.`;
+      return `Press ${e.key}${appCtx}.`;
+    }
+    if (e.kind === "shortcut") {
+      const t = (e.label || "").toLowerCase();
+      if (t.includes("c")) return `Copy selection${appCtx}.`;
+      if (t.includes("v")) return `Paste${appCtx}.`;
+      if (t.includes("x")) return `Cut selection${appCtx}.`;
+      if (t.includes("s")) return `Save${appCtx}.`;
+      if (t.includes("z")) return `Undo${appCtx}.`;
+      return `Keyboard shortcut: ${e.label}${appCtx}.`;
+    }
+    if (e.kind === "click") return `Click${appCtx} at the highlighted element.`;
+    return e.label;
+  };
+
+  // Auto-accept rules: events that don't need a question
+  const shouldAutoAccept = (e: RecordedEvent): boolean => {
+    if (e.kind === "scroll") return true;
+    if (e.kind === "shortcut") return true;
+    if (e.kind === "key") {
+      const k = (e.key || "").toLowerCase();
+      return ["enter", "tab", "esc", "escape", "backspace", "delete", "left", "right", "up", "down"].some((x) => k.includes(x));
+    }
+    return false;
+  };
+
+  // Track outstanding native prompts
+  const pendingPromptsRef = useRef<Map<string, RecordedEvent>>(new Map());
+
   // Subscribe to agent events while in demo mode
   useEffect(() => {
     if (mode !== "demo") return;
     const off = agent.onEvent((e) => {
       if (e.type === "recorded_event") {
         const ev = e.event;
-        // Ignore-own-tab filter
+        // Browser-side belt-and-braces ignore filter
         if (ignoreSelf) {
           const extras = extraIgnore.split(",").map((s) => s.trim()).filter(Boolean);
           if (isOwnTabEvent(ev, extras)) return;
         }
-        setEvents((prev) => [...prev, ev].slice(-200));
+        const auto = autoExplain(ev);
+        const enriched: RecordedEvent = { ...ev, explanation: auto };
+        setEvents((prev) => [...prev, enriched].slice(-200));
 
-        // Pause for explanation
-        if (explainEach) {
-          try { agent.pauseRecording(); } catch { /* ignore */ }
-          setPendingEvent(ev);
-          setPendingExplain("");
+        if (!explainEach || shouldAutoAccept(ev)) return;
+
+        // Ask wherever the user is via native OS dialog
+        const id = `p_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+        pendingPromptsRef.current.set(id, enriched);
+        try {
+          agent.pauseRecording();
+          agent.prompt({
+            id,
+            title: "EchoPilot — explain this step",
+            message: `${ev.label}\n\n(Edit the explanation below or click Save to accept.)`,
+            default: auto,
+          });
+        } catch { /* ignore */ }
+      } else if (e.type === "prompt_result") {
+        const target = pendingPromptsRef.current.get(e.id);
+        pendingPromptsRef.current.delete(e.id);
+        if (target) {
+          const text = e.ok && e.text ? e.text : target.explanation;
+          setEvents((prev) => {
+            const idx = prev.lastIndexOf(target);
+            if (idx < 0) return prev;
+            const next = prev.slice();
+            next[idx] = { ...target, explanation: text };
+            return next;
+          });
         }
+        try { agent.resumeRecording(); } catch { /* ignore */ }
       } else if (e.type === "recording_started") {
-        toast.success("Recording started on your machine");
+        toast.success("Recording started — explanations will pop up on your screen");
       } else if (e.type === "recording_stopped") {
         if (e.events?.length) setEvents((prev) => [...prev, ...e.events]);
       } else if (e.type === "error") {
@@ -126,12 +189,26 @@ function Studio() {
     return () => { off(); };
   }, [mode, ignoreSelf, extraIgnore, explainEach]);
 
+  // Build the ignore-pattern list sent to the agent
+  const buildIgnorePatterns = (): string[] => {
+    if (!ignoreSelf) return [];
+    const extras = extraIgnore.split(",").map((s) => s.trim()).filter(Boolean);
+    return [...DEFAULT_IGNORE_PATTERNS, ...extras];
+  };
+
+  // Push pattern updates to the agent live
+  useEffect(() => {
+    if (!recording || !agentConnected) return;
+    try { agent.setIgnorePatterns(buildIgnorePatterns()); } catch { /* ignore */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ignoreSelf, extraIgnore, recording, agentConnected]);
+
   const startRecording = async () => {
     if (!agentConnected) {
       toast.error("Desktop Agent not connected. Open Settings → Desktop Agent first.");
       return;
     }
-    try { agent.startRecording(); }
+    try { agent.startRecording(buildIgnorePatterns()); }
     catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to start recording");
       return;
@@ -156,13 +233,7 @@ function Studio() {
         e.kind === "scroll" ? "scroll" :
         e.kind === "shortcut" ? "shortcut" : "click";
       const label = e.explanation?.trim() || e.label;
-      return {
-        id: `s${i}`,
-        type,
-        target: e.label,
-        description: label,
-        confidence: 0.9,
-      };
+      return { id: `s${i}`, type, target: e.label, description: label, confidence: 0.9 };
     });
     setSteps(generated);
     setVars([]);
@@ -177,7 +248,7 @@ function Studio() {
       const idx = prev.lastIndexOf(pendingEvent);
       if (idx < 0) return prev;
       const next = prev.slice();
-      next[idx] = { ...pendingEvent, explanation: text || undefined };
+      next[idx] = { ...pendingEvent, explanation: text || pendingEvent.explanation };
       return next;
     });
     setPendingEvent(null);

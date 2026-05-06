@@ -29,6 +29,7 @@ export type AgentEvent =
   | { type: "recorded_event"; event: RecordedEvent }
   | { type: "log"; level: "info" | "warn" | "error" | "success"; msg: string }
   | { type: "error"; msg: string }
+  | { type: "prompt_result"; id: string; ok: boolean; text: string }
   | { type: "pong" };
 
 export type RecordedEvent = {
@@ -222,8 +223,11 @@ class AgentBridge {
   requestScreenshot() {
     this.send({ type: "screenshot" });
   }
-  startRecording() {
-    this.send({ type: "start_recording" });
+  startRecording(ignorePatterns: string[] = []) {
+    this.send({ type: "start_recording", ignore_patterns: ignorePatterns });
+  }
+  setIgnorePatterns(patterns: string[]) {
+    this.send({ type: "set_ignore_patterns", patterns });
   }
   pauseRecording() {
     this.send({ type: "pause_recording" });
@@ -233,6 +237,9 @@ class AgentBridge {
   }
   stopRecording() {
     this.send({ type: "stop_recording" });
+  }
+  prompt(opts: { id: string; title?: string; message: string; default?: string }) {
+    this.send({ type: "prompt", ...opts });
   }
 }
 
