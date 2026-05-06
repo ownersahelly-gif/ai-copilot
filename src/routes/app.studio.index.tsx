@@ -482,6 +482,13 @@ function Studio() {
                       className="flex items-start gap-2 rounded-md bg-secondary/40 px-2.5 py-1.5 text-xs"
                     >
                       <span className="font-mono text-[10px] text-muted-foreground">+{(e.ts/1000).toFixed(1)}s</span>
+                      {e.thumbnail && (
+                        <img
+                          src={e.thumbnail}
+                          alt=""
+                          className="h-10 w-16 shrink-0 rounded border border-border/60 object-cover"
+                        />
+                      )}
                       <div className="min-w-0 flex-1">
                         <div className="truncate">{e.label}</div>
                         {e.explanation && (
