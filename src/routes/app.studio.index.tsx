@@ -38,6 +38,7 @@ function isOwnTabEvent(e: RecordedEvent, extra: string[]): boolean {
 function Studio() {
   const nav = useNavigate();
   const generate = useServerFn(generateWorkflowFromPrompt);
+  const analyze = useServerFn(analyzeClickTarget);
   const { status: agentStatus } = useAgentStatus();
   const agentConnected = agentStatus === "connected";
 
