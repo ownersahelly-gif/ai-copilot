@@ -24,9 +24,23 @@ export type AgentEvent =
   | { type: "awaiting_approval"; index: number; step: WorkflowStep }
   | { type: "run_finished"; runId: string; ok: boolean }
   | { type: "screenshot"; data: string | null }
+  | { type: "recording_started" }
+  | { type: "recording_stopped"; events: RecordedEvent[] }
+  | { type: "recorded_event"; event: RecordedEvent }
   | { type: "log"; level: "info" | "warn" | "error" | "success"; msg: string }
   | { type: "error"; msg: string }
   | { type: "pong" };
+
+export type RecordedEvent = {
+  ts: number;
+  kind: "click" | "type" | "scroll" | "key" | "shortcut";
+  label: string;
+  x?: number;
+  y?: number;
+  button?: string;
+  text?: string;
+  key?: string;
+};
 
 const URL_KEY = "echopilot.agent.url";
 const TOKEN_KEY = "echopilot.agent.token";
