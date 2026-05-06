@@ -428,7 +428,18 @@ async def execute_run(ws: WebSocket, recorder: "Recorder", msg: dict) -> None:
             target = step.get("target") or ""
             value = step.get("value") or ""
             desc = step.get("description") or step.get("label") or stype
-            await ws.send_json({"type": "step_started", "index": i, "step": step})
+
+            # Live preview: snapshot the screen BEFORE the action, marking
+            # the click coordinates if this is a click step.
+            mark = None
+            if stype == "click":
+                import re as _re2
+                m2 = _re2.search(r"\((\d+)\s*,\s*(\d+)\)", target)
+                if m2:
+                    mark = (int(m2.group(1)), int(m2.group(2)))
+            shot_b64 = _grab_screen(mark)
+            await ws.send_json({"type": "step_started", "index": i, "step": step,
+                                "screenshot": shot_b64})
             await ws.send_json({"type": "log", "level": "info", "msg": f"[{i+1}/{len(steps)}] {desc}"})
 
             try:
