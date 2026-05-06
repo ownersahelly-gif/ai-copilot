@@ -1,7 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Mic, MicOff, Sparkles, Camera, MousePointer, Keyboard, Scroll, AppWindow, Loader2, Save, ArrowLeft } from "lucide-react";
+import { Mic, MicOff, Sparkles, Camera, MousePointer, Keyboard, Scroll, AppWindow, Loader2, Save, ArrowLeft, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { generateWorkflowFromPrompt } from "@/ai/ai.functions";
 import { useServerFn } from "@tanstack/react-start";
 import { createWorkflow, type WorkflowStep, type WorkflowVariable } from "@/lib/workflows";
+import { agent, useAgentStatus, type RecordedEvent } from "@/lib/agent-bridge";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/app/studio/")({ component: Studio });
