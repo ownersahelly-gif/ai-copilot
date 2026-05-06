@@ -48,32 +48,70 @@ function WorkflowDetail() {
     toast.success("Saved");
   };
 
+  const log = (level: string, msg: string) => setLogs((l) => [...l, { ts: new Date().toISOString(), level, msg }]);
+
+  const runReal = async (runRow: { id: string }) => {
+    return new Promise<boolean>((resolve) => {
+      const off = agent.onEvent((e: AgentEvent) => {
+        if (e.type === "run_started") log("info", `Agent accepted run · ${e.total} steps`);
+        else if (e.type === "step_started") { setCurrentStep(e.index + 1); log("info", `Step ${e.index + 1}: ${e.step.description}`); }
+        else if (e.type === "step_done") {
+          if (e.screenshot) setScreenshot(`data:image/jpeg;base64,${e.screenshot}`);
+          if (!e.ok) log("error", `Step failed: ${e.error}`);
+        }
+        else if (e.type === "awaiting_approval") setPendingApproval({ runId: runRow.id, index: e.index });
+        else if (e.type === "log") log(e.level, e.msg);
+        else if (e.type === "error") log("error", e.msg);
+        else if (e.type === "run_finished") {
+          log(e.ok ? "success" : "error", e.ok ? "Workflow completed on this machine" : "Workflow failed");
+          off(); resolve(e.ok);
+        }
+      });
+      try {
+        agent.runWorkflow({ runId: runRow.id, mode, steps, inputs });
+      } catch (err) {
+        log("error", (err as Error).message); off(); resolve(false);
+      }
+    });
+  };
+
+  const runSimulated = async () => {
+    for (let i = 0; i < steps.length; i++) {
+      await new Promise((res) => setTimeout(res, 800));
+      setCurrentStep(i + 1);
+      const s = steps[i];
+      log("info", `Step ${i+1}: ${s.description}`);
+      if (Math.random() < 0.12) {
+        log("warn", `Recovery agent: layout shift detected, re-locating element`);
+        await new Promise((res) => setTimeout(res, 500));
+        log("info", `Recovered. Continuing.`);
+      }
+    }
+    log("success", "Workflow completed (simulated — connect the desktop agent in Settings to run for real)");
+    return true;
+  };
+
   const run = async () => {
-    setRunning(true); setCurrentStep(0); setLogs([{ ts: new Date().toISOString(), level: "info", msg: "Starting run…" }]);
+    setRunning(true); setCurrentStep(0); setLogs([]); setScreenshot(null); setPendingApproval(null);
     try {
       const r = await startRun(id, mode, inputs);
-      // Simulate live execution updates
-      for (let i = 0; i < steps.length; i++) {
-        await new Promise((res) => setTimeout(res, 800));
-        setCurrentStep(i + 1);
-        const s = steps[i];
-        setLogs((l) => [...l, { ts: new Date().toISOString(), level: "info", msg: `Step ${i+1}: ${s.description}` }]);
-        if (Math.random() < 0.12) {
-          setLogs((l) => [...l, { ts: new Date().toISOString(), level: "warn", msg: `Recovery agent: layout shift detected, re-locating element` }]);
-          await new Promise((res) => setTimeout(res, 500));
-          setLogs((l) => [...l, { ts: new Date().toISOString(), level: "info", msg: `Recovered. Continuing.` }]);
-        }
-      }
-      setLogs((l) => [...l, { ts: new Date().toISOString(), level: "success", msg: "Workflow completed successfully" }]);
+      const useReal = agentStatus.status === "connected";
+      log("info", useReal ? "Dispatching to local desktop agent…" : "Running in simulator…");
+      const ok = useReal ? await runReal(r) : await runSimulated();
       await supabase.from("workflow_runs").update({
-        status: "completed",
+        status: ok ? "completed" : "failed",
         finished_at: new Date().toISOString(),
         current_step: steps.length,
-        logs: logs as never,
       }).eq("id", r.id);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Run failed");
-    } finally { setRunning(false); }
+    } finally { setRunning(false); setPendingApproval(null); }
+  };
+
+  const approve = (ok: boolean) => {
+    if (!pendingApproval) return;
+    agent.approveStep(pendingApproval.runId, ok);
+    setPendingApproval(null);
   };
 
   return (
