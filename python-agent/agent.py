@@ -323,6 +323,133 @@ class Recorder:
 
 # -------------------- WebSocket server --------------------
 app = FastAPI()
+
+
+# -------------------- Workflow executor --------------------
+_KEY_MAP = {
+    "enter": "enter", "return": "enter", "tab": "tab", "esc": "esc", "escape": "esc",
+    "space": "space", "backspace": "backspace", "delete": "delete",
+    "left": "left", "right": "right", "up": "up", "down": "down",
+    "home": "home", "end": "end", "page_up": "page_up", "page_down": "page_down",
+}
+
+def _resolve_key(name: str):
+    if not name: return None
+    n = name.strip().lower()
+    mapped = _KEY_MAP.get(n, n)
+    return getattr(KbKey, mapped, None) or (name if len(name) == 1 else None)
+
+def _parse_combo(combo: str) -> tuple[list, str | None]:
+    """'cmd+c' -> ([Key.cmd], 'c')   'ctrl+shift+t' -> ([ctrl,shift], 't')"""
+    parts = [p.strip().lower() for p in combo.replace(" ", "").split("+") if p.strip()]
+    mods, final = [], None
+    for p in parts:
+        if p in ("cmd", "command", "meta", "win"): mods.append(KbKey.cmd)
+        elif p in ("ctrl", "control"): mods.append(KbKey.ctrl)
+        elif p in ("alt", "option"): mods.append(KbKey.alt)
+        elif p == "shift": mods.append(KbKey.shift)
+        else: final = p
+    return mods, final
+
+async def execute_run(ws: WebSocket, recorder: "Recorder", msg: dict) -> None:
+    run_id = msg.get("runId", "")
+    steps = msg.get("steps") or []
+    mode = msg.get("mode", "auto")
+    inputs = msg.get("inputs") or {}
+    if not HAVE_PYNPUT:
+        await ws.send_json({"type": "log", "level": "error",
+            "msg": "pynput not installed; cannot execute"})
+        await ws.send_json({"type": "run_finished", "runId": run_id, "ok": False})
+        return
+
+    # Pause recording during playback so we don't capture our own events
+    was_active = recorder.active
+    if was_active:
+        recorder.pause()
+
+    mouse_ctl = MouseController()
+    kb_ctl = KeyboardController()
+
+    await ws.send_json({"type": "run_started", "runId": run_id, "total": len(steps)})
+    await ws.send_json({"type": "log", "level": "info",
+        "msg": f"Executing {len(steps)} steps ({mode})"})
+    await asyncio.sleep(2.5)  # give the user a moment to switch windows
+
+    ok_overall = True
+    try:
+        for i, step in enumerate(steps):
+            stype = (step.get("type") or "").lower()
+            target = step.get("target") or ""
+            value = step.get("value") or ""
+            desc = step.get("description") or step.get("label") or stype
+            await ws.send_json({"type": "step_started", "index": i, "step": step})
+            await ws.send_json({"type": "log", "level": "info", "msg": f"[{i+1}/{len(steps)}] {desc}"})
+
+            try:
+                if stype == "click":
+                    # target may be "(x, y) [left]" from a recording
+                    import re as _re
+                    m = _re.search(r"\((\d+)\s*,\s*(\d+)\)", target)
+                    if m:
+                        x, y = int(m.group(1)), int(m.group(2))
+                        mouse_ctl.position = (x, y)
+                        await asyncio.sleep(0.15)
+                        mouse_ctl.click(MouseButton.left, 1)
+                    else:
+                        await ws.send_json({"type": "log", "level": "warn",
+                            "msg": f"  no coords for click step — skipped"})
+
+                elif stype == "type":
+                    text = value or target
+                    if text:
+                        kb_ctl.type(text)
+
+                elif stype == "scroll":
+                    # crude scroll a few notches in the recorded direction
+                    direction = (target or "down").lower()
+                    dy = -3 if "down" in direction else 3 if "up" in direction else 0
+                    dx = -3 if "left" in direction else 3 if "right" in direction else 0
+                    mouse_ctl.scroll(dx, dy)
+
+                elif stype == "shortcut":
+                    mods, final = _parse_combo(target or value)
+                    if mods:
+                        for m_ in mods: kb_ctl.press(m_)
+                        if final:
+                            k = _resolve_key(final)
+                            if k:
+                                kb_ctl.press(k); kb_ctl.release(k)
+                        for m_ in reversed(mods): kb_ctl.release(m_)
+
+                elif stype == "key":
+                    k = _resolve_key(target or value)
+                    if k:
+                        kb_ctl.press(k); kb_ctl.release(k)
+
+                elif stype == "wait":
+                    try: await asyncio.sleep(float(value or target or "1"))
+                    except Exception: await asyncio.sleep(1)
+
+                else:
+                    await ws.send_json({"type": "log", "level": "warn",
+                        "msg": f"  step type '{stype}' not implemented — skipped"})
+
+                await ws.send_json({"type": "step_done", "index": i, "ok": True})
+                await asyncio.sleep(0.35)
+
+            except Exception as ex:
+                ok_overall = False
+                await ws.send_json({"type": "step_done", "index": i, "ok": False, "error": str(ex)})
+                await ws.send_json({"type": "log", "level": "error", "msg": f"  step failed: {ex!r}"})
+                if mode != "assist":
+                    break
+    finally:
+        if was_active:
+            recorder.resume()
+        await ws.send_json({"type": "run_finished", "runId": run_id, "ok": ok_overall})
+        await ws.send_json({"type": "log", "level": "success" if ok_overall else "error",
+            "msg": "Run complete" if ok_overall else "Run finished with errors"})
+
 TOKEN = get_or_create_token()
 
 
