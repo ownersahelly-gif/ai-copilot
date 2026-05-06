@@ -29,6 +29,8 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 try:
     from pynput import mouse, keyboard  # type: ignore
+    from pynput.mouse import Button as MouseButton, Controller as MouseController  # type: ignore
+    from pynput.keyboard import Controller as KeyboardController, Key as KbKey  # type: ignore
     HAVE_PYNPUT = True
 except Exception as e:  # pragma: no cover
     print(f"[agent] pynput unavailable: {e!r} — recording will be disabled")
