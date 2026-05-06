@@ -547,40 +547,37 @@ function Studio() {
           </div>
         </div>
 
-        {/* Explain-this-step modal */}
-        <Dialog open={!!pendingEvent} onOpenChange={(o) => { if (!o) skipExplanation(); }}>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Explain this step</DialogTitle>
-              <DialogDescription>
-                Tell EchoPilot what this action means so it can repeat it intelligently next time.
-              </DialogDescription>
-            </DialogHeader>
-            {pendingEvent && (
-              <div className="rounded-md border border-border/60 bg-card/60 p-3 text-xs">
-                <div className="font-medium">{pendingEvent.label}</div>
-                {(pendingEvent.app || pendingEvent.window) && (
-                  <div className="mt-1 text-muted-foreground">
-                    {pendingEvent.app}{pendingEvent.app && pendingEvent.window ? " · " : ""}{pendingEvent.window}
-                  </div>
-                )}
-              </div>
-            )}
+        {/* Floating, non-blocking explain-this-step card */}
+        {pendingEvent && (
+          <div className="fixed bottom-6 right-6 z-50 w-[360px] rounded-xl border border-border/60 bg-card/95 p-4 shadow-2xl backdrop-blur">
+            <div className="flex items-center justify-between">
+              <div className="text-xs font-semibold text-primary">Explain this step{explainQueue.length > 1 ? ` (${explainQueue.length} queued)` : ""}</div>
+              <button onClick={skipExplanation} className="text-[11px] text-muted-foreground hover:text-foreground">Skip</button>
+            </div>
+            <div className="mt-2 rounded-md border border-border/60 bg-background/60 p-2 text-[11px]">
+              <div className="font-medium">{pendingEvent.label}</div>
+              {(pendingEvent.app || pendingEvent.window) && (
+                <div className="mt-0.5 text-muted-foreground">
+                  {pendingEvent.app}{pendingEvent.app && pendingEvent.window ? " · " : ""}{pendingEvent.window}
+                </div>
+              )}
+            </div>
             <Textarea
               autoFocus
               value={pendingExplain}
               onChange={(e) => setPendingExplain(e.target.value)}
-              placeholder="e.g. Open the customer's record so I can update their address"
-              className="min-h-[100px]"
+              onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); submitExplanation(); } }}
+              placeholder={pendingEvent.explanation || "Why did you do this?"}
+              className="mt-2 min-h-[70px] text-xs"
             />
-            <DialogFooter>
-              <Button variant="outline" onClick={skipExplanation}>Skip</Button>
-              <Button onClick={submitExplanation} style={{ background: "var(--gradient-primary)", color: "var(--primary-foreground)" }}>
-                Save & continue
+            <div className="mt-2 flex justify-end gap-2">
+              <Button size="sm" variant="outline" onClick={skipExplanation}>Skip</Button>
+              <Button size="sm" onClick={submitExplanation} style={{ background: "var(--gradient-primary)", color: "var(--primary-foreground)" }}>
+                Save (⌘↵)
               </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
