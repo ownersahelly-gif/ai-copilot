@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { generateWorkflowFromPrompt } from "@/server/ai.functions";
+import { generateWorkflowFromPrompt } from "@/ai/ai.functions";
 import { useServerFn } from "@tanstack/react-start";
 import { createWorkflow, type WorkflowStep, type WorkflowVariable } from "@/lib/workflows";
 import { toast } from "sonner";
