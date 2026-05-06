@@ -302,13 +302,13 @@ function Studio() {
             </div>
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2">
-                {webcamOn ? <Video className="h-4 w-4 text-primary" /> : <VideoOff className="h-4 w-4 text-muted-foreground" />}
+                {screenOn ? <Monitor className="h-4 w-4 text-primary" /> : <MonitorOff className="h-4 w-4 text-muted-foreground" />}
                 <div>
-                  <Label className="text-xs">Webcam reference</Label>
-                  <p className="text-[10px] text-muted-foreground">Small live tile while you record.</p>
+                  <Label className="text-xs">Live screen preview</Label>
+                  <p className="text-[10px] text-muted-foreground">Shares your screen back into this panel as a reference.</p>
                 </div>
               </div>
-              <Switch checked={webcamOn} onCheckedChange={setWebcamOn} />
+              <Switch checked={screenOn} onCheckedChange={setScreenOn} />
             </div>
             {ignoreSelf && (
               <div className="sm:col-span-3">
