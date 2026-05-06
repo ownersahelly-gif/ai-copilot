@@ -55,7 +55,7 @@ function Studio() {
   // New: ignore-own-tab + webcam + explain-each-step
   const [ignoreSelf, setIgnoreSelf] = useState(true);
   const [extraIgnore, setExtraIgnore] = useState("");
-  const [webcamOn, setWebcamOn] = useState(false);
+  const [screenOn, setScreenOn] = useState(false);
   const [explainEach, setExplainEach] = useState(true);
   const [pendingEvent, setPendingEvent] = useState<RecordedEvent | null>(null);
   const [pendingExplain, setPendingExplain] = useState("");
@@ -65,34 +65,36 @@ function Studio() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
-  // Webcam lifecycle
+  // Screen-share preview lifecycle
   useEffect(() => {
-    if (!webcamOn) {
+    if (!screenOn) {
       streamRef.current?.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
       if (videoRef.current) videoRef.current.srcObject = null;
       return;
     }
     let cancelled = false;
-    navigator.mediaDevices.getUserMedia({ video: { width: 320, height: 240 }, audio: false })
+    navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 15 }, audio: false })
       .then((stream) => {
         if (cancelled) { stream.getTracks().forEach((t) => t.stop()); return; }
         streamRef.current = stream;
+        // If the user clicks the browser's "Stop sharing" button
+        stream.getVideoTracks()[0]?.addEventListener("ended", () => setScreenOn(false));
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
           videoRef.current.play().catch(() => {});
         }
       })
       .catch((err) => {
-        toast.error(`Webcam: ${err instanceof Error ? err.message : "permission denied"}`);
-        setWebcamOn(false);
+        toast.error(`Screen share: ${err instanceof Error ? err.message : "permission denied"}`);
+        setScreenOn(false);
       });
     return () => {
       cancelled = true;
       streamRef.current?.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
     };
-  }, [webcamOn]);
+  }, [screenOn]);
 
   // Subscribe to agent events while in demo mode
   useEffect(() => {
