@@ -40,6 +40,9 @@ export type RecordedEvent = {
   button?: string;
   text?: string;
   key?: string;
+  app?: string;
+  window?: string;
+  explanation?: string;
 };
 
 const URL_KEY = "echopilot.agent.url";
