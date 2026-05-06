@@ -261,8 +261,15 @@ function WorkflowDetail() {
               <div className="h-2 w-full overflow-hidden rounded-full bg-secondary">
                 <motion.div className="h-full" style={{ background: "var(--gradient-primary)" }} animate={{ width: `${(currentStep / Math.max(steps.length, 1)) * 100}%` }} />
               </div>
-              <div className="mt-4 grid min-h-[200px] place-items-center overflow-hidden rounded-lg border border-dashed border-border/60 bg-background/40">
-                {screenshot ? (
+              <div className="mt-4 relative grid min-h-[200px] place-items-center overflow-hidden rounded-lg border border-dashed border-border/60 bg-background/40">
+                {livePreview ? (
+                  <video
+                    ref={videoRef}
+                    muted
+                    playsInline
+                    className="h-full max-h-[420px] w-full object-contain bg-black"
+                  />
+                ) : screenshot ? (
                   <img src={screenshot} alt="Agent screen" className="max-h-[320px] w-full object-contain" />
                 ) : running ? (
                   <div className="text-center">
@@ -270,7 +277,23 @@ function WorkflowDetail() {
                     <p className="mt-2 text-xs text-muted-foreground">{agentStatus.status === "connected" ? "Agent executing on this machine…" : "Vision agent capturing screen…"}</p>
                     <p className="mt-1 text-sm">{steps[Math.max(currentStep - 1, 0)]?.description}</p>
                   </div>
-                ) : <p className="text-xs text-muted-foreground">Idle</p>}
+                ) : <p className="text-xs text-muted-foreground">Idle — enable live preview to watch your screen</p>}
+
+                {/* Live current-step caption overlay */}
+                {livePreview && running && steps[Math.max(currentStep - 1, 0)] && (
+                  <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-3 text-center text-xs text-white">
+                    Step {currentStep}/{steps.length} · {steps[Math.max(currentStep - 1, 0)]?.description}
+                  </div>
+                )}
+
+                {/* Toggle button */}
+                <button
+                  onClick={() => setLivePreview((v) => !v)}
+                  className="absolute right-2 top-2 inline-flex items-center gap-1.5 rounded-md border border-border/60 bg-background/80 px-2 py-1 text-[11px] backdrop-blur hover:bg-background"
+                >
+                  {livePreview ? <MonitorOff className="h-3.5 w-3.5" /> : <Monitor className="h-3.5 w-3.5 text-primary" />}
+                  {livePreview ? "Stop preview" : "Live preview"}
+                </button>
               </div>
               {pendingApproval && (
                 <div className="mt-3 flex items-center justify-between rounded-md border border-warning/30 bg-warning/10 p-3 text-xs">
