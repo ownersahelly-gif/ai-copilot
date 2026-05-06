@@ -218,21 +218,37 @@ function WorkflowDetail() {
           <div className="lg:col-span-2 space-y-4">
             <div className="glass rounded-xl p-5">
               <div className="mb-3 flex items-center justify-between">
-                <h3 className="font-display text-sm font-semibold">Live execution</h3>
+                <div className="flex items-center gap-2">
+                  <h3 className="font-display text-sm font-semibold">Live execution</h3>
+                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${agentStatus.status === "connected" ? "bg-success/15 text-success" : "bg-muted text-muted-foreground"}`}>
+                    {agentStatus.status === "connected" ? "REAL · agent" : "SIMULATED"}
+                  </span>
+                </div>
                 <span className="text-xs text-muted-foreground">{currentStep} / {steps.length}</span>
               </div>
               <div className="h-2 w-full overflow-hidden rounded-full bg-secondary">
                 <motion.div className="h-full" style={{ background: "var(--gradient-primary)" }} animate={{ width: `${(currentStep / Math.max(steps.length, 1)) * 100}%` }} />
               </div>
-              <div className="mt-4 grid h-[180px] place-items-center rounded-lg border border-dashed border-border/60 bg-background/40">
-                {running ? (
+              <div className="mt-4 grid min-h-[200px] place-items-center overflow-hidden rounded-lg border border-dashed border-border/60 bg-background/40">
+                {screenshot ? (
+                  <img src={screenshot} alt="Agent screen" className="max-h-[320px] w-full object-contain" />
+                ) : running ? (
                   <div className="text-center">
                     <Camera className="mx-auto h-8 w-8 animate-pulse text-primary" />
-                    <p className="mt-2 text-xs text-muted-foreground">Vision agent capturing screen…</p>
+                    <p className="mt-2 text-xs text-muted-foreground">{agentStatus.status === "connected" ? "Agent executing on this machine…" : "Vision agent capturing screen…"}</p>
                     <p className="mt-1 text-sm">{steps[Math.max(currentStep - 1, 0)]?.description}</p>
                   </div>
                 ) : <p className="text-xs text-muted-foreground">Idle</p>}
               </div>
+              {pendingApproval && (
+                <div className="mt-3 flex items-center justify-between rounded-md border border-warning/30 bg-warning/10 p-3 text-xs">
+                  <span>Approve step {pendingApproval.index + 1}: <strong>{steps[pendingApproval.index]?.description}</strong></span>
+                  <div className="flex gap-2">
+                    <Button size="sm" variant="outline" onClick={() => approve(false)}>Skip</Button>
+                    <Button size="sm" onClick={() => approve(true)}>Approve</Button>
+                  </div>
+                </div>
+              )}
             </div>
             <div className="glass rounded-xl p-5">
               <h3 className="mb-3 font-display text-sm font-semibold">Logs</h3>
