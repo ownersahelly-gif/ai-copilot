@@ -207,7 +207,7 @@ function Studio() {
         const id = `p_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
         pendingPromptsRef.current.set(id, enriched);
         try {
-          agent.notify?.({
+          (agent as any).notify?.({
             id,
             title: "EchoPilot — captured step",
             message: auto,
