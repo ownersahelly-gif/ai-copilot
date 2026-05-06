@@ -1,7 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Mic, MicOff, Sparkles, Camera, MousePointer, Keyboard, Scroll, AppWindow, Loader2, Save, ArrowLeft } from "lucide-react";
+import { Mic, MicOff, Sparkles, Camera, MousePointer, Keyboard, Scroll, AppWindow, Loader2, Save, ArrowLeft, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { generateWorkflowFromPrompt } from "@/ai/ai.functions";
 import { useServerFn } from "@tanstack/react-start";
 import { createWorkflow, type WorkflowStep, type WorkflowVariable } from "@/lib/workflows";
+import { agent, useAgentStatus, type RecordedEvent } from "@/lib/agent-bridge";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/app/studio/")({ component: Studio });
@@ -21,52 +22,82 @@ const ICONS = {
 function Studio() {
   const nav = useNavigate();
   const generate = useServerFn(generateWorkflowFromPrompt);
+  const { status: agentStatus } = useAgentStatus();
+  const agentConnected = agentStatus === "connected";
 
   const [mode, setMode] = useState<"choose" | "demo" | "describe" | "review">("choose");
   const [recording, setRecording] = useState(false);
   const [seconds, setSeconds] = useState(0);
-  const [events, setEvents] = useState<{ type: string; label: string; ts: number }[]>([]);
+  const [events, setEvents] = useState<RecordedEvent[]>([]);
   const [name, setName] = useState("");
   const [desc, setDesc] = useState("");
   const [prompt, setPrompt] = useState("");
   const [steps, setSteps] = useState<WorkflowStep[]>([]);
   const [vars, setVars] = useState<WorkflowVariable[]>([]);
   const [busy, setBusy] = useState(false);
+  const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const startTsRef = useRef(0);
 
-  const startRecording = () => {
-    setRecording(true); setEvents([]); setSeconds(0);
-    const start = Date.now();
-    const sample = ["Click 'File menu'", "Type 'Acme Corp'", "Click 'Submit'", "Scrolled product table", "Switched to Excel", "Selected cell B4", "Copied data", "Switched to browser"];
-    const tick = setInterval(() => {
-      const ms = Date.now() - start;
-      setSeconds(Math.floor(ms / 1000));
-      if (Math.random() < 0.45) {
-        const lbl = sample[Math.floor(Math.random() * sample.length)];
-        setEvents((e) => [...e, { type: lbl.split(" ")[0].toLowerCase(), label: lbl, ts: ms }].slice(-30));
+  // Subscribe to agent events while in demo mode
+  useEffect(() => {
+    if (mode !== "demo") return;
+    const off = agent.onEvent((e) => {
+      if (e.type === "recorded_event") {
+        setEvents((prev) => [...prev, e.event].slice(-200));
+      } else if (e.type === "recording_started") {
+        toast.success("Recording started on your machine");
+      } else if (e.type === "recording_stopped") {
+        // Final batch (in case any tail events were buffered)
+        setEvents((prev) => (e.events?.length ? e.events : prev));
+      } else if (e.type === "error") {
+        toast.error(e.msg);
       }
-    }, 700);
-    (window as unknown as { __rec?: number }).__rec = tick as unknown as number;
+    });
+    return () => { off(); };
+  }, [mode]);
+
+  const startRecording = async () => {
+    if (!agentConnected) {
+      toast.error("Desktop Agent not connected. Open Settings → Desktop Agent first.");
+      return;
+    }
+    try {
+      agent.startRecording();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to start recording");
+      return;
+    }
+    setRecording(true);
+    setEvents([]);
+    setSeconds(0);
+    startTsRef.current = Date.now();
+    tickRef.current = setInterval(() => {
+      setSeconds(Math.floor((Date.now() - startTsRef.current) / 1000));
+    }, 250);
   };
 
   const stopRecording = () => {
     setRecording(false);
-    const t = (window as unknown as { __rec?: number }).__rec;
-    if (t) clearInterval(t as unknown as NodeJS.Timeout);
-    // Convert events to workflow steps
-    const generated: WorkflowStep[] = events.map((e, i) => ({
-      id: `s${i}`,
-      type: (e.type as WorkflowStep["type"]) ?? "click",
-      target: e.label,
-      description: e.label,
-      confidence: 0.85 + Math.random() * 0.14,
-    }));
-    setSteps(generated.length ? generated : [
-      { id: "s1", type: "open_app", target: "Excel", description: "Open Excel", confidence: 0.99 },
-      { id: "s2", type: "navigate", target: "Sheet 1", description: "Open data sheet", confidence: 0.95 },
-      { id: "s3", type: "extract", target: "Column A", description: "Extract product names", confidence: 0.92 },
-    ]);
-    setVars([{ name: "input_file", type: "file", description: "Source file" }]);
-    setName(`Workflow ${new Date().toLocaleString()}`);
+    if (tickRef.current) { clearInterval(tickRef.current); tickRef.current = null; }
+    try { agent.stopRecording(); } catch { /* ignore */ }
+    // Convert real captured events to workflow steps
+    const generated: WorkflowStep[] = events.map((e, i) => {
+      const type: WorkflowStep["type"] =
+        e.kind === "click" ? "click" :
+        e.kind === "type" ? "type" :
+        e.kind === "scroll" ? "scroll" :
+        e.kind === "shortcut" ? "shortcut" : "click";
+      return {
+        id: `s${i}`,
+        type,
+        target: e.label,
+        description: e.label,
+        confidence: 0.9,
+      };
+    });
+    setSteps(generated);
+    setVars([]);
+    setName(`Recording ${new Date().toLocaleString()}`);
     setMode("review");
   };
 
@@ -153,6 +184,15 @@ function Studio() {
               )}
             </div>
           </div>
+
+          {!agentConnected && (
+            <div className="mt-4 flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <div>
+                Desktop Agent is not connected. Recording captures real mouse and keyboard input from your machine via the Python sidecar — go to <span className="font-semibold">Settings → Desktop Agent</span> and connect it first.
+              </div>
+            </div>
+          )}
 
           <div className="mt-6 grid gap-4 lg:grid-cols-3">
             <div className="lg:col-span-2 rounded-xl border border-border/60 bg-card/40 p-5">
