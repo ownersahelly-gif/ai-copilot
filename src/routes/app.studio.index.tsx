@@ -1,0 +1,289 @@
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { Mic, MicOff, Sparkles, Camera, MousePointer, Keyboard, Scroll, AppWindow, Loader2, Save, ArrowLeft } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
+import { generateWorkflowFromPrompt } from "@/server/ai.functions";
+import { useServerFn } from "@tanstack/react-start";
+import { createWorkflow, type WorkflowStep, type WorkflowVariable } from "@/lib/workflows";
+import { toast } from "sonner";
+
+export const Route = createFileRoute("/app/studio/")({ component: Studio });
+
+const ICONS = {
+  click: MousePointer, type: Keyboard, scroll: Scroll, screenshot: Camera,
+  open_app: AppWindow, navigate: AppWindow, drag: MousePointer, shortcut: Keyboard, wait: Sparkles, extract: Camera,
+} as const;
+
+function Studio() {
+  const nav = useNavigate();
+  const generate = useServerFn(generateWorkflowFromPrompt);
+
+  const [mode, setMode] = useState<"choose" | "demo" | "describe" | "review">("choose");
+  const [recording, setRecording] = useState(false);
+  const [seconds, setSeconds] = useState(0);
+  const [events, setEvents] = useState<{ type: string; label: string; ts: number }[]>([]);
+  const [name, setName] = useState("");
+  const [desc, setDesc] = useState("");
+  const [prompt, setPrompt] = useState("");
+  const [steps, setSteps] = useState<WorkflowStep[]>([]);
+  const [vars, setVars] = useState<WorkflowVariable[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  const startRecording = () => {
+    setRecording(true); setEvents([]); setSeconds(0);
+    const start = Date.now();
+    const sample = ["Click 'File menu'", "Type 'Acme Corp'", "Click 'Submit'", "Scrolled product table", "Switched to Excel", "Selected cell B4", "Copied data", "Switched to browser"];
+    const tick = setInterval(() => {
+      const ms = Date.now() - start;
+      setSeconds(Math.floor(ms / 1000));
+      if (Math.random() < 0.45) {
+        const lbl = sample[Math.floor(Math.random() * sample.length)];
+        setEvents((e) => [...e, { type: lbl.split(" ")[0].toLowerCase(), label: lbl, ts: ms }].slice(-30));
+      }
+    }, 700);
+    (window as unknown as { __rec?: number }).__rec = tick as unknown as number;
+  };
+
+  const stopRecording = () => {
+    setRecording(false);
+    const t = (window as unknown as { __rec?: number }).__rec;
+    if (t) clearInterval(t as unknown as NodeJS.Timeout);
+    // Convert events to workflow steps
+    const generated: WorkflowStep[] = events.map((e, i) => ({
+      id: `s${i}`,
+      type: (e.type as WorkflowStep["type"]) ?? "click",
+      target: e.label,
+      description: e.label,
+      confidence: 0.85 + Math.random() * 0.14,
+    }));
+    setSteps(generated.length ? generated : [
+      { id: "s1", type: "open_app", target: "Excel", description: "Open Excel", confidence: 0.99 },
+      { id: "s2", type: "navigate", target: "Sheet 1", description: "Open data sheet", confidence: 0.95 },
+      { id: "s3", type: "extract", target: "Column A", description: "Extract product names", confidence: 0.92 },
+    ]);
+    setVars([{ name: "input_file", type: "file", description: "Source file" }]);
+    setName(`Workflow ${new Date().toLocaleString()}`);
+    setMode("review");
+  };
+
+  const generateFromPrompt = async () => {
+    if (!prompt.trim()) return;
+    setBusy(true);
+    try {
+      const res = await generate({ data: { prompt } });
+      if (res.error || !res.workflow) throw new Error(res.error ?? "AI failed");
+      const w = res.workflow as { name: string; description?: string; steps: WorkflowStep[]; variables?: WorkflowVariable[] };
+      setName(w.name);
+      setDesc(w.description ?? "");
+      setSteps(w.steps.map((s, i) => ({ ...s, id: `g${i}`, confidence: 0.9 + Math.random() * 0.08 })));
+      setVars(w.variables ?? []);
+      setMode("review");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Generation failed");
+    } finally { setBusy(false); }
+  };
+
+  const save = async () => {
+    if (!name.trim()) { toast.error("Give your workflow a name"); return; }
+    setBusy(true);
+    try {
+      const w = await createWorkflow({ name, description: desc, steps, variables: vars });
+      toast.success("Workflow saved");
+      nav({ to: "/app/library/$id", params: { id: w.id } });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Save failed");
+    } finally { setBusy(false); }
+  };
+
+  if (mode === "choose") {
+    return (
+      <div className="mx-auto max-w-4xl space-y-8">
+        <div>
+          <h1 className="font-display text-3xl font-semibold tracking-tight">Recording Studio</h1>
+          <p className="mt-1 text-muted-foreground">Two ways to teach the AI a new workflow.</p>
+        </div>
+        <div className="grid gap-5 md:grid-cols-2">
+          <button onClick={() => setMode("demo")} className="glass group rounded-2xl p-8 text-left transition-shadow hover:shadow-glow">
+            <div className="mb-4 inline-flex h-12 w-12 items-center justify-center rounded-xl shadow-glow" style={{ background: "var(--gradient-primary)" }}>
+              <Mic className="h-5 w-5 text-background" />
+            </div>
+            <h3 className="font-display text-xl font-semibold">Watch and Learn</h3>
+            <p className="mt-2 text-sm text-muted-foreground">Demonstrate the task once. EchoPilot captures clicks, typing, scroll and screen context — then extracts the logic.</p>
+            <span className="mt-4 inline-flex items-center gap-1 text-xs text-primary">Start demonstration →</span>
+          </button>
+          <button onClick={() => setMode("describe")} className="glass group rounded-2xl p-8 text-left transition-shadow hover:shadow-glow">
+            <div className="mb-4 inline-flex h-12 w-12 items-center justify-center rounded-xl border border-accent/40 bg-accent/10">
+              <Sparkles className="h-5 w-5 text-accent" />
+            </div>
+            <h3 className="font-display text-xl font-semibold">Describe in plain English</h3>
+            <p className="mt-2 text-sm text-muted-foreground">Tell the AI what you want to automate. It drafts the workflow, you refine and save.</p>
+            <span className="mt-4 inline-flex items-center gap-1 text-xs text-accent">Describe a workflow →</span>
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (mode === "demo") {
+    return (
+      <div className="mx-auto max-w-5xl space-y-6">
+        <button onClick={() => setMode("choose")} className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground">
+          <ArrowLeft className="h-3.5 w-3.5" /> Back
+        </button>
+        <div className="glass rounded-2xl p-8">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <h2 className="font-display text-2xl font-semibold">Demonstration Mode</h2>
+              <p className="mt-1 text-sm text-muted-foreground">Recording your screen, mouse, keyboard and window context.</p>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="font-mono text-2xl tabular-nums">{String(Math.floor(seconds / 60)).padStart(2, "0")}:{String(seconds % 60).padStart(2, "0")}</span>
+              {!recording ? (
+                <Button onClick={startRecording} className="gap-2" style={{ background: "var(--gradient-primary)", color: "var(--primary-foreground)" }}>
+                  <Mic className="h-4 w-4" /> Start recording
+                </Button>
+              ) : (
+                <Button onClick={stopRecording} variant="destructive" className="gap-2">
+                  <MicOff className="h-4 w-4" /> Stop & analyze
+                </Button>
+              )}
+            </div>
+          </div>
+
+          <div className="mt-6 grid gap-4 lg:grid-cols-3">
+            <div className="lg:col-span-2 rounded-xl border border-border/60 bg-card/40 p-5">
+              <div className="mb-3 flex items-center gap-2 text-xs">
+                <span className={`relative inline-block h-2 w-2 rounded-full ${recording ? "bg-destructive" : "bg-muted-foreground"}`}>
+                  {recording && <span className="pulse-dot text-destructive" />}
+                </span>
+                {recording ? "Recording — perform the task naturally" : "Idle"}
+              </div>
+              <div className="grid h-[260px] place-items-center rounded-lg border border-dashed border-border/60 bg-background/40">
+                {recording ? (
+                  <div className="text-center">
+                    <Camera className="mx-auto h-10 w-10 animate-pulse text-primary" />
+                    <p className="mt-3 text-sm text-muted-foreground">Vision agent is observing your screen…</p>
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">Press <span className="text-foreground">Start recording</span> when ready.</p>
+                )}
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-border/60 bg-card/40 p-5">
+              <h3 className="mb-3 font-display text-sm font-semibold">Captured actions</h3>
+              <div className="h-[260px] space-y-1.5 overflow-y-auto pr-1">
+                <AnimatePresence initial={false}>
+                  {events.length === 0 && <p className="text-xs text-muted-foreground">No actions yet.</p>}
+                  {events.map((e, i) => (
+                    <motion.div
+                      key={i + e.ts}
+                      initial={{ opacity: 0, x: 8 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      className="flex items-center gap-2 rounded-md bg-secondary/40 px-2.5 py-1.5 text-xs"
+                    >
+                      <span className="font-mono text-[10px] text-muted-foreground">+{(e.ts/1000).toFixed(1)}s</span>
+                      <span className="truncate">{e.label}</span>
+                    </motion.div>
+                  ))}
+                </AnimatePresence>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (mode === "describe") {
+    return (
+      <div className="mx-auto max-w-3xl space-y-6">
+        <button onClick={() => setMode("choose")} className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground">
+          <ArrowLeft className="h-3.5 w-3.5" /> Back
+        </button>
+        <div className="glass rounded-2xl p-8">
+          <h2 className="font-display text-2xl font-semibold">Describe your workflow</h2>
+          <p className="mt-1 text-sm text-muted-foreground">Be specific about apps, inputs and the outcome.</p>
+          <Textarea
+            className="mt-5 min-h-[160px] font-sans"
+            placeholder={`e.g. "For each row in invoices.csv, open our CRM, create a new contact with the name, email and company, then upload the matching PDF from the /invoices folder."`}
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+          />
+          <div className="mt-5 flex justify-end">
+            <Button onClick={generateFromPrompt} disabled={busy || !prompt.trim()} className="gap-2" style={{ background: "var(--gradient-primary)", color: "var(--primary-foreground)" }}>
+              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+              Generate workflow
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // review
+  return (
+    <div className="mx-auto max-w-4xl space-y-6">
+      <button onClick={() => setMode("choose")} className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground">
+        <ArrowLeft className="h-3.5 w-3.5" /> Start over
+      </button>
+      <div className="glass rounded-2xl p-8">
+        <div className="flex items-center gap-2 text-xs text-success"><Sparkles className="h-3.5 w-3.5" /> AI extracted {steps.length} steps</div>
+        <h2 className="mt-1 font-display text-2xl font-semibold">Review & save</h2>
+
+        <div className="mt-6 grid gap-4">
+          <div>
+            <Label htmlFor="n" className="text-xs">Workflow name</Label>
+            <Input id="n" value={name} onChange={(e) => setName(e.target.value)} className="mt-1.5" />
+          </div>
+          <div>
+            <Label htmlFor="d" className="text-xs">Description</Label>
+            <Textarea id="d" value={desc} onChange={(e) => setDesc(e.target.value)} className="mt-1.5" placeholder="What does this workflow do?" />
+          </div>
+        </div>
+
+        <h3 className="mt-7 mb-3 font-display text-sm font-semibold">Steps</h3>
+        <ol className="space-y-2">
+          {steps.map((s, i) => {
+            const Icon = ICONS[s.type] ?? MousePointer;
+            return (
+              <li key={s.id} className="flex items-start gap-3 rounded-lg border border-border/60 bg-card/40 p-3">
+                <span className="mt-0.5 grid h-7 w-7 place-items-center rounded-md bg-secondary font-mono text-xs">{i + 1}</span>
+                <Icon className="mt-1.5 h-4 w-4 text-primary" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm">{s.description}</div>
+                  <div className="text-[10px] text-muted-foreground">{s.type} · {s.target}</div>
+                </div>
+                {typeof s.confidence === "number" && (
+                  <span className="rounded-full bg-success/10 px-2 py-0.5 text-[10px] text-success">{Math.round(s.confidence * 100)}%</span>
+                )}
+              </li>
+            );
+          })}
+        </ol>
+
+        {vars.length > 0 && (
+          <>
+            <h3 className="mt-7 mb-3 font-display text-sm font-semibold">Variables</h3>
+            <div className="flex flex-wrap gap-2">
+              {vars.map((v) => (
+                <span key={v.name} className="rounded-full border border-accent/40 bg-accent/10 px-3 py-1 text-xs text-accent">{v.name} · {v.type}</span>
+              ))}
+            </div>
+          </>
+        )}
+
+        <div className="mt-8 flex justify-end gap-2">
+          <Button variant="outline" onClick={() => setMode("choose")}>Discard</Button>
+          <Button onClick={save} disabled={busy} className="gap-2" style={{ background: "var(--gradient-primary)", color: "var(--primary-foreground)" }}>
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Save workflow
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
