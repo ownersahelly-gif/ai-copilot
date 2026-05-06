@@ -6,7 +6,7 @@ import { Send, Sparkles, Loader2, Bot, User as UserIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useServerFn } from "@tanstack/react-start";
-import { chatWithAI } from "@/server/ai.functions";
+import { chatWithAI } from "@/ai/ai.functions";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/app/assistant/")({ component: Assistant });
