@@ -225,6 +225,12 @@ class AgentBridge {
   startRecording() {
     this.send({ type: "start_recording" });
   }
+  pauseRecording() {
+    this.send({ type: "pause_recording" });
+  }
+  resumeRecording() {
+    this.send({ type: "resume_recording" });
+  }
   stopRecording() {
     this.send({ type: "stop_recording" });
   }
