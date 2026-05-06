@@ -223,8 +223,11 @@ class AgentBridge {
   requestScreenshot() {
     this.send({ type: "screenshot" });
   }
-  startRecording() {
-    this.send({ type: "start_recording" });
+  startRecording(ignorePatterns: string[] = []) {
+    this.send({ type: "start_recording", ignore_patterns: ignorePatterns });
+  }
+  setIgnorePatterns(patterns: string[]) {
+    this.send({ type: "set_ignore_patterns", patterns });
   }
   pauseRecording() {
     this.send({ type: "pause_recording" });
@@ -234,6 +237,9 @@ class AgentBridge {
   }
   stopRecording() {
     this.send({ type: "stop_recording" });
+  }
+  prompt(opts: { id: string; title?: string; message: string; default?: string }) {
+    this.send({ type: "prompt", ...opts });
   }
 }
 
