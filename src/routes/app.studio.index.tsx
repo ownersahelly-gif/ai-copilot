@@ -57,8 +57,8 @@ function Studio() {
   const [ignoreSelf, setIgnoreSelf] = useState(true);
   const [extraIgnore, setExtraIgnore] = useState("");
   const [screenOn, setScreenOn] = useState(false);
-  const [explainEach, setExplainEach] = useState(false);
-  const [pendingEvent, setPendingEvent] = useState<RecordedEvent | null>(null);
+  const [explainEach, setExplainEach] = useState(true);
+  const [explainQueue, setExplainQueue] = useState<RecordedEvent[]>([]);
   const [pendingExplain, setPendingExplain] = useState("");
 
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
