@@ -64,7 +64,8 @@ function SettingsPage() {
       </section>
       <AgentPanel />
 
-
+      <section className="glass rounded-xl p-6">
+        <h2 className="mb-4 font-display text-lg font-semibold">Automation safety</h2>
         <ul className="space-y-4">
           <Toggle icon={Shield} label="Approve dangerous actions" desc="Pause before file deletes, payments and irreversible operations." checked={prefs.confirmDangerous} onChange={(v) => setPrefs({ ...prefs, confirmDangerous: v })} />
           <Toggle icon={Cpu} label="Background execution" desc="Allow workflows to run minimised." checked={prefs.backgroundExec} onChange={(v) => setPrefs({ ...prefs, backgroundExec: v })} />
