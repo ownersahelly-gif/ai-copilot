@@ -205,22 +205,8 @@ function Studio() {
         setEvents((prev) => [...prev, enriched].slice(-200));
         if (!explainEach || shouldAutoAccept(ev)) return;
         setExplainQueue((q) => [...q, enriched]);
-      } else if (e.type === "prompt_result") {
-        const target = pendingPromptsRef.current.get(e.id);
-        pendingPromptsRef.current.delete(e.id);
-        if (target) {
-          const text = e.ok && e.text ? e.text : target.explanation;
-          setEvents((prev) => {
-            const idx = prev.lastIndexOf(target);
-            if (idx < 0) return prev;
-            const next = prev.slice();
-            next[idx] = { ...target, explanation: text };
-            return next;
-          });
-        }
-        try { agent.resumeRecording(); } catch { /* ignore */ }
       } else if (e.type === "recording_started") {
-        toast.success("Recording started — explanations will pop up on your screen");
+        toast.success("Recording started — pop-ups will ask you to explain steps");
       } else if (e.type === "recording_stopped") {
         if (e.events?.length) setEvents((prev) => [...prev, ...e.events]);
       } else if (e.type === "error") {
