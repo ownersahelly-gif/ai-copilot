@@ -1,11 +1,13 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Mic, MicOff, Sparkles, Camera, MousePointer, Keyboard, Scroll, AppWindow, Loader2, Save, ArrowLeft, AlertTriangle } from "lucide-react";
+import { Mic, MicOff, Sparkles, Camera, MousePointer, Keyboard, Scroll, AppWindow, Loader2, Save, ArrowLeft, AlertTriangle, Video, VideoOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { generateWorkflowFromPrompt } from "@/ai/ai.functions";
 import { useServerFn } from "@tanstack/react-start";
 import { createWorkflow, type WorkflowStep, type WorkflowVariable } from "@/lib/workflows";
@@ -18,6 +20,20 @@ const ICONS = {
   click: MousePointer, type: Keyboard, scroll: Scroll, screenshot: Camera,
   open_app: AppWindow, navigate: AppWindow, drag: MousePointer, shortcut: Keyboard, wait: Sparkles, extract: Camera,
 } as const;
+
+// Default substrings (case-insensitive) that mark an event as happening inside
+// the EchoPilot web app itself, so we filter it out of the recording.
+const DEFAULT_IGNORE_PATTERNS = [
+  "echopilot", "lovable.app", "lovableproject.com", "localhost", "127.0.0.1",
+];
+
+function isOwnTabEvent(e: RecordedEvent, extra: string[]): boolean {
+  const hay = `${e.app ?? ""} ${e.window ?? ""}`.toLowerCase();
+  if (!hay.trim()) return false;
+  return [...DEFAULT_IGNORE_PATTERNS, ...extra]
+    .filter(Boolean)
+    .some((p) => hay.includes(p.toLowerCase()));
+}
 
 function Studio() {
   const nav = useNavigate();
@@ -35,35 +51,86 @@ function Studio() {
   const [steps, setSteps] = useState<WorkflowStep[]>([]);
   const [vars, setVars] = useState<WorkflowVariable[]>([]);
   const [busy, setBusy] = useState(false);
+
+  // New: ignore-own-tab + webcam + explain-each-step
+  const [ignoreSelf, setIgnoreSelf] = useState(true);
+  const [extraIgnore, setExtraIgnore] = useState("");
+  const [webcamOn, setWebcamOn] = useState(false);
+  const [explainEach, setExplainEach] = useState(true);
+  const [pendingEvent, setPendingEvent] = useState<RecordedEvent | null>(null);
+  const [pendingExplain, setPendingExplain] = useState("");
+
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startTsRef = useRef(0);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+
+  // Webcam lifecycle
+  useEffect(() => {
+    if (!webcamOn) {
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+      if (videoRef.current) videoRef.current.srcObject = null;
+      return;
+    }
+    let cancelled = false;
+    navigator.mediaDevices.getUserMedia({ video: { width: 320, height: 240 }, audio: false })
+      .then((stream) => {
+        if (cancelled) { stream.getTracks().forEach((t) => t.stop()); return; }
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.play().catch(() => {});
+        }
+      })
+      .catch((err) => {
+        toast.error(`Webcam: ${err instanceof Error ? err.message : "permission denied"}`);
+        setWebcamOn(false);
+      });
+    return () => {
+      cancelled = true;
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    };
+  }, [webcamOn]);
 
   // Subscribe to agent events while in demo mode
   useEffect(() => {
     if (mode !== "demo") return;
     const off = agent.onEvent((e) => {
       if (e.type === "recorded_event") {
-        setEvents((prev) => [...prev, e.event].slice(-200));
+        const ev = e.event;
+        // Ignore-own-tab filter
+        if (ignoreSelf) {
+          const extras = extraIgnore.split(",").map((s) => s.trim()).filter(Boolean);
+          if (isOwnTabEvent(ev, extras)) return;
+        }
+        setEvents((prev) => [...prev, ev].slice(-200));
+
+        // Pause for explanation
+        if (explainEach) {
+          try { agent.pauseRecording(); } catch { /* ignore */ }
+          setPendingEvent(ev);
+          setPendingExplain("");
+        }
       } else if (e.type === "recording_started") {
         toast.success("Recording started on your machine");
       } else if (e.type === "recording_stopped") {
-        // Final batch (in case any tail events were buffered)
-        setEvents((prev) => (e.events?.length ? e.events : prev));
+        if (e.events?.length) setEvents((prev) => [...prev, ...e.events]);
       } else if (e.type === "error") {
         toast.error(e.msg);
       }
     });
     return () => { off(); };
-  }, [mode]);
+  }, [mode, ignoreSelf, extraIgnore, explainEach]);
 
   const startRecording = async () => {
     if (!agentConnected) {
       toast.error("Desktop Agent not connected. Open Settings → Desktop Agent first.");
       return;
     }
-    try {
-      agent.startRecording();
-    } catch (e) {
+    try { agent.startRecording(); }
+    catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to start recording");
       return;
     }
@@ -80,18 +147,18 @@ function Studio() {
     setRecording(false);
     if (tickRef.current) { clearInterval(tickRef.current); tickRef.current = null; }
     try { agent.stopRecording(); } catch { /* ignore */ }
-    // Convert real captured events to workflow steps
     const generated: WorkflowStep[] = events.map((e, i) => {
       const type: WorkflowStep["type"] =
         e.kind === "click" ? "click" :
         e.kind === "type" ? "type" :
         e.kind === "scroll" ? "scroll" :
         e.kind === "shortcut" ? "shortcut" : "click";
+      const label = e.explanation?.trim() || e.label;
       return {
         id: `s${i}`,
         type,
         target: e.label,
-        description: e.label,
+        description: label,
         confidence: 0.9,
       };
     });
@@ -99,6 +166,27 @@ function Studio() {
     setVars([]);
     setName(`Recording ${new Date().toLocaleString()}`);
     setMode("review");
+  };
+
+  const submitExplanation = () => {
+    if (!pendingEvent) return;
+    const text = pendingExplain.trim();
+    setEvents((prev) => {
+      const idx = prev.lastIndexOf(pendingEvent);
+      if (idx < 0) return prev;
+      const next = prev.slice();
+      next[idx] = { ...pendingEvent, explanation: text || undefined };
+      return next;
+    });
+    setPendingEvent(null);
+    setPendingExplain("");
+    try { agent.resumeRecording(); } catch { /* ignore */ }
+  };
+
+  const skipExplanation = () => {
+    setPendingEvent(null);
+    setPendingExplain("");
+    try { agent.resumeRecording(); } catch { /* ignore */ }
   };
 
   const generateFromPrompt = async () => {
@@ -189,10 +277,49 @@ function Studio() {
             <div className="mt-4 flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
               <div>
-                Desktop Agent is not connected. Recording captures real mouse and keyboard input from your machine via the Python sidecar — go to <span className="font-semibold">Settings → Desktop Agent</span> and connect it first.
+                Desktop Agent is not connected. Recording captures real mouse and keyboard input via the Python sidecar — go to <span className="font-semibold">Settings → Desktop Agent</span> and connect it first.
               </div>
             </div>
           )}
+
+          {/* Settings strip */}
+          <div className="mt-5 grid gap-3 rounded-xl border border-border/60 bg-card/40 p-4 sm:grid-cols-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <Label className="text-xs">Ignore EchoPilot tab</Label>
+                <p className="text-[10px] text-muted-foreground">Drops events from this browser window.</p>
+              </div>
+              <Switch checked={ignoreSelf} onCheckedChange={setIgnoreSelf} />
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <Label className="text-xs">Explain each step</Label>
+                <p className="text-[10px] text-muted-foreground">Pause after every action and ask why.</p>
+              </div>
+              <Switch checked={explainEach} onCheckedChange={setExplainEach} />
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                {webcamOn ? <Video className="h-4 w-4 text-primary" /> : <VideoOff className="h-4 w-4 text-muted-foreground" />}
+                <div>
+                  <Label className="text-xs">Webcam reference</Label>
+                  <p className="text-[10px] text-muted-foreground">Small live tile while you record.</p>
+                </div>
+              </div>
+              <Switch checked={webcamOn} onCheckedChange={setWebcamOn} />
+            </div>
+            {ignoreSelf && (
+              <div className="sm:col-span-3">
+                <Label className="text-xs">Extra ignore patterns (comma-separated, matched in app/window title)</Label>
+                <Input
+                  value={extraIgnore}
+                  onChange={(e) => setExtraIgnore(e.target.value)}
+                  placeholder="e.g. Slack, Notion, mycompany.com"
+                  className="mt-1.5"
+                />
+              </div>
+            )}
+          </div>
 
           <div className="mt-6 grid gap-4 lg:grid-cols-3">
             <div className="lg:col-span-2 rounded-xl border border-border/60 bg-card/40 p-5">
@@ -200,9 +327,9 @@ function Studio() {
                 <span className={`relative inline-block h-2 w-2 rounded-full ${recording ? "bg-destructive" : "bg-muted-foreground"}`}>
                   {recording && <span className="pulse-dot text-destructive" />}
                 </span>
-                {recording ? "Recording — perform the task naturally" : "Idle"}
+                {recording ? (pendingEvent ? "Paused — waiting for your explanation" : "Recording — perform the task naturally") : "Idle"}
               </div>
-              <div className="grid h-[260px] place-items-center rounded-lg border border-dashed border-border/60 bg-background/40">
+              <div className="relative grid h-[260px] place-items-center overflow-hidden rounded-lg border border-dashed border-border/60 bg-background/40">
                 {recording ? (
                   <div className="text-center">
                     <Camera className="mx-auto h-10 w-10 animate-pulse text-primary" />
@@ -210,6 +337,14 @@ function Studio() {
                   </div>
                 ) : (
                   <p className="text-sm text-muted-foreground">Press <span className="text-foreground">Start recording</span> when ready.</p>
+                )}
+                {webcamOn && (
+                  <video
+                    ref={videoRef}
+                    muted
+                    playsInline
+                    className="absolute bottom-3 right-3 h-24 w-32 rounded-md border border-border/70 bg-black object-cover shadow-lg"
+                  />
                 )}
               </div>
             </div>
@@ -224,10 +359,20 @@ function Studio() {
                       key={i + e.ts}
                       initial={{ opacity: 0, x: 8 }}
                       animate={{ opacity: 1, x: 0 }}
-                      className="flex items-center gap-2 rounded-md bg-secondary/40 px-2.5 py-1.5 text-xs"
+                      className="flex items-start gap-2 rounded-md bg-secondary/40 px-2.5 py-1.5 text-xs"
                     >
                       <span className="font-mono text-[10px] text-muted-foreground">+{(e.ts/1000).toFixed(1)}s</span>
-                      <span className="truncate">{e.label}</span>
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate">{e.label}</div>
+                        {e.explanation && (
+                          <div className="truncate text-[10px] text-primary">“{e.explanation}”</div>
+                        )}
+                        {(e.app || e.window) && (
+                          <div className="truncate text-[10px] text-muted-foreground">
+                            {e.app}{e.app && e.window ? " · " : ""}{e.window}
+                          </div>
+                        )}
+                      </div>
                     </motion.div>
                   ))}
                 </AnimatePresence>
@@ -235,6 +380,41 @@ function Studio() {
             </div>
           </div>
         </div>
+
+        {/* Explain-this-step modal */}
+        <Dialog open={!!pendingEvent} onOpenChange={(o) => { if (!o) skipExplanation(); }}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Explain this step</DialogTitle>
+              <DialogDescription>
+                Tell EchoPilot what this action means so it can repeat it intelligently next time.
+              </DialogDescription>
+            </DialogHeader>
+            {pendingEvent && (
+              <div className="rounded-md border border-border/60 bg-card/60 p-3 text-xs">
+                <div className="font-medium">{pendingEvent.label}</div>
+                {(pendingEvent.app || pendingEvent.window) && (
+                  <div className="mt-1 text-muted-foreground">
+                    {pendingEvent.app}{pendingEvent.app && pendingEvent.window ? " · " : ""}{pendingEvent.window}
+                  </div>
+                )}
+              </div>
+            )}
+            <Textarea
+              autoFocus
+              value={pendingExplain}
+              onChange={(e) => setPendingExplain(e.target.value)}
+              placeholder="e.g. Open the customer's record so I can update their address"
+              className="min-h-[100px]"
+            />
+            <DialogFooter>
+              <Button variant="outline" onClick={skipExplanation}>Skip</Button>
+              <Button onClick={submitExplanation} style={{ background: "var(--gradient-primary)", color: "var(--primary-foreground)" }}>
+                Save & continue
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     );
   }

@@ -40,6 +40,9 @@ export type RecordedEvent = {
   button?: string;
   text?: string;
   key?: string;
+  app?: string;
+  window?: string;
+  explanation?: string;
 };
 
 const URL_KEY = "echopilot.agent.url";
@@ -221,6 +224,12 @@ class AgentBridge {
   }
   startRecording() {
     this.send({ type: "start_recording" });
+  }
+  pauseRecording() {
+    this.send({ type: "pause_recording" });
+  }
+  resumeRecording() {
+    this.send({ type: "resume_recording" });
   }
   stopRecording() {
     this.send({ type: "stop_recording" });

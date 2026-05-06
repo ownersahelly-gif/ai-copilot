@@ -1,8 +1,8 @@
 """
 EchoPilot Desktop Agent — local sidecar.
-Runs a WebSocket server on ws://127.0.0.1:8765/ws that the EchoPilot web app
-connects to. Authenticates with a pairing token and (now) captures REAL
-mouse + keyboard input via pynput when the UI requests recording.
+Captures REAL mouse + keyboard input via pynput and tags every event with the
+currently-focused application / window title so the web UI can ignore actions
+that happened inside the EchoPilot browser tab itself.
 
 Run:
     python -m venv .venv
@@ -10,10 +10,8 @@ Run:
     pip install -r requirements.txt
     python agent.py
 
-On macOS you must grant the Terminal (or your Python binary) the
-"Accessibility" and "Input Monitoring" permissions in
-System Settings → Privacy & Security, otherwise pynput cannot see global
-input events.
+macOS: grant the Terminal (or python binary) BOTH "Accessibility" and
+"Input Monitoring" in System Settings → Privacy & Security.
 """
 from __future__ import annotations
 
@@ -36,9 +34,10 @@ except Exception as e:  # pragma: no cover
     print(f"[agent] pynput unavailable: {e!r} — recording will be disabled")
     HAVE_PYNPUT = False
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 HOST = "127.0.0.1"
 PORT = 8765
+SYS = platform.system()
 
 TOKEN_FILE = Path.home() / ".echopilot_token"
 
@@ -55,13 +54,61 @@ def get_or_create_token() -> str:
     return tok
 
 
+# -------------------- Active window probe --------------------
+def _active_window() -> tuple[str, str]:
+    """Return (app_name, window_title). Best effort; "" on failure."""
+    try:
+        if SYS == "Darwin":
+            try:
+                from AppKit import NSWorkspace  # type: ignore
+                app = NSWorkspace.sharedWorkspace().activeApplication() or {}
+                name = app.get("NSApplicationName", "") or ""
+            except Exception:
+                name = ""
+            title = ""
+            try:
+                import Quartz  # type: ignore
+                opts = (
+                    Quartz.kCGWindowListOptionOnScreenOnly
+                    | Quartz.kCGWindowListExcludeDesktopElements
+                )
+                for w in Quartz.CGWindowListCopyWindowInfo(opts, Quartz.kCGNullWindowID) or []:
+                    if w.get("kCGWindowOwnerName") == name:
+                        t = w.get("kCGWindowName") or ""
+                        if t:
+                            title = t
+                            break
+            except Exception:
+                pass
+            return name, title
+        if SYS == "Windows":
+            try:
+                import ctypes
+                user32 = ctypes.windll.user32
+                hwnd = user32.GetForegroundWindow()
+                length = user32.GetWindowTextLengthW(hwnd)
+                buf = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(hwnd, buf, length + 1)
+                return "", buf.value or ""
+            except Exception:
+                return "", ""
+        if SYS == "Linux":
+            try:
+                import subprocess
+                out = subprocess.run(
+                    ["xdotool", "getactivewindow", "getwindowname"],
+                    capture_output=True, text=True, timeout=0.4,
+                )
+                return "", (out.stdout or "").strip()
+            except Exception:
+                return "", ""
+    except Exception:
+        pass
+    return "", ""
+
+
 # -------------------- Recorder --------------------
 class Recorder:
-    """
-    Captures real OS input via pynput. Posts events into an asyncio.Queue
-    that the websocket task drains and forwards to the browser.
-    """
-
     def __init__(self, loop: asyncio.AbstractEventLoop, queue: asyncio.Queue):
         self.loop = loop
         self.queue = queue
@@ -71,12 +118,16 @@ class Recorder:
         self._last_type_ts = 0.0
         self._start_ts = 0.0
         self.active = False
+        self.paused = False
         self._lock = threading.Lock()
 
-    # ---- helpers ----
     def _emit(self, ev: dict) -> None:
+        if self.paused:
+            return
         ev["ts"] = int((time.monotonic() - self._start_ts) * 1000)
-        # Hand off to the asyncio loop in a thread-safe way
+        app_name, title = _active_window()
+        ev["app"] = app_name
+        ev["window"] = title
         self.loop.call_soon_threadsafe(self.queue.put_nowait, ev)
 
     def _flush_typing(self) -> None:
@@ -91,9 +142,8 @@ class Recorder:
             "text": text,
         })
 
-    # ---- listener callbacks ----
     def _on_click(self, x, y, button, pressed):
-        if not pressed:
+        if not pressed or self.paused:
             return
         self._flush_typing()
         btn = str(button).split(".")[-1]
@@ -104,6 +154,8 @@ class Recorder:
         })
 
     def _on_scroll(self, x, y, dx, dy):
+        if self.paused:
+            return
         self._flush_typing()
         direction = "down" if dy < 0 else "up" if dy > 0 else ("right" if dx > 0 else "left")
         self._emit({
@@ -113,24 +165,20 @@ class Recorder:
         })
 
     def _on_press(self, key):
+        if self.paused:
+            return
         try:
-            ch = key.char  # printable
+            ch = key.char
         except AttributeError:
             ch = None
         name = getattr(key, "name", None)
-
-        # Modifier-shortcut detection
         if name in {"cmd", "cmd_l", "cmd_r", "ctrl", "ctrl_l", "ctrl_r", "alt", "alt_l", "alt_r"}:
-            self._modifier_held = name
             return
-
         if ch is not None and ch.isprintable():
             with self._lock:
                 self._typing_buffer.append(ch)
                 self._last_type_ts = time.monotonic()
             return
-
-        # Non-printable key (Enter, Tab, Esc, arrows, etc.)
         self._flush_typing()
         self._emit({
             "kind": "key",
@@ -139,42 +187,41 @@ class Recorder:
         })
 
     def _on_release(self, key):
-        # If user pauses typing >800ms, flush
         if self._typing_buffer and time.monotonic() - self._last_type_ts > 0.8:
             self._flush_typing()
 
-    # ---- public API ----
     def start(self) -> bool:
         if not HAVE_PYNPUT:
             return False
         if self.active:
+            self.paused = False
             return True
         self._start_ts = time.monotonic()
         self._typing_buffer.clear()
-        self._mouse_listener = mouse.Listener(
-            on_click=self._on_click, on_scroll=self._on_scroll,
-        )
-        self._kb_listener = keyboard.Listener(
-            on_press=self._on_press, on_release=self._on_release,
-        )
+        self.paused = False
+        self._mouse_listener = mouse.Listener(on_click=self._on_click, on_scroll=self._on_scroll)
+        self._kb_listener = keyboard.Listener(on_press=self._on_press, on_release=self._on_release)
         self._mouse_listener.start()
         self._kb_listener.start()
         self.active = True
         return True
+
+    def pause(self) -> None:
+        self.paused = True
+        self._flush_typing()
+
+    def resume(self) -> None:
+        self.paused = False
 
     def stop(self) -> None:
         if not self.active:
             return
         self.active = False
         self._flush_typing()
-        try:
-            self._mouse_listener and self._mouse_listener.stop()
-        except Exception:
-            pass
-        try:
-            self._kb_listener and self._kb_listener.stop()
-        except Exception:
-            pass
+        try: self._mouse_listener and self._mouse_listener.stop()
+        except Exception: pass
+        try: self._kb_listener and self._kb_listener.stop()
+        except Exception: pass
         self._mouse_listener = None
         self._kb_listener = None
 
@@ -200,7 +247,6 @@ async def ws_endpoint(ws: WebSocket):
     })
 
     async def pump_events():
-        """Forward recorded events to the browser as they happen."""
         while True:
             ev = await queue.get()
             try:
@@ -236,33 +282,37 @@ async def ws_endpoint(ws: WebSocket):
 
             elif mtype == "start_recording":
                 if not HAVE_PYNPUT:
-                    await ws.send_json({
-                        "type": "error",
-                        "msg": "pynput is not installed in the agent venv. Run: pip install -r requirements.txt",
-                    })
+                    await ws.send_json({"type": "error",
+                        "msg": "pynput not installed. Run: pip install -r requirements.txt"})
                     continue
                 ok = recorder.start()
                 if ok:
                     await ws.send_json({"type": "recording_started"})
                     await ws.send_json({"type": "log", "level": "info",
-                                        "msg": "Recording real mouse + keyboard input"})
+                        "msg": "Recording real mouse + keyboard input"})
                 else:
                     await ws.send_json({"type": "error", "msg": "Failed to start recorder"})
+
+            elif mtype == "pause_recording":
+                recorder.pause()
+                await ws.send_json({"type": "log", "level": "info", "msg": "Recording paused"})
+
+            elif mtype == "resume_recording":
+                recorder.resume()
+                await ws.send_json({"type": "log", "level": "info", "msg": "Recording resumed"})
 
             elif mtype == "stop_recording":
                 recorder.stop()
                 await ws.send_json({"type": "recording_stopped", "events": []})
 
             elif mtype == "screenshot":
-                # Optional: implement with mss if you want screenshots
                 await ws.send_json({"type": "screenshot", "data": None})
 
             elif mtype == "run":
-                # Workflow execution would go here. Not implemented in this build.
                 await ws.send_json({"type": "log", "level": "warn",
-                                    "msg": "Workflow execution is not yet wired in this agent build."})
+                    "msg": "Workflow execution is not yet wired in this agent build."})
                 await ws.send_json({"type": "run_finished",
-                                    "runId": msg.get("runId", ""), "ok": False})
+                    "runId": msg.get("runId", ""), "ok": False})
 
     except WebSocketDisconnect:
         pass
@@ -278,8 +328,6 @@ def main():
     print(f" Listening on ws://{HOST}:{PORT}/ws")
     print(f" Pairing token: {TOKEN}")
     print(f" pynput available: {HAVE_PYNPUT}")
-    if not HAVE_PYNPUT:
-        print(" -> Install with: pip install -r requirements.txt")
     print(" macOS: grant Terminal Accessibility + Input Monitoring permissions")
     print("=" * 60)
     uvicorn.run(app, host=HOST, port=PORT, log_level="warning")
