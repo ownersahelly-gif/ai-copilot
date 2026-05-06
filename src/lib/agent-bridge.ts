@@ -119,7 +119,9 @@ class AgentBridge {
         if (this.status !== "connected") {
           try {
             ws.close();
-          } catch {}
+          } catch {
+            // Ignore close errors while reporting the original connection timeout.
+          }
           this.setStatus("error", { error: "connection timed out" });
           reject(new Error("timeout"));
         }
@@ -156,7 +158,9 @@ class AgentBridge {
           reject(new Error("auth_failed"));
           try {
             ws.close();
-          } catch {}
+          } catch {
+            // Ignore close errors after an auth rejection.
+          }
         }
         this.eventListeners.forEach((fn) => fn(msg));
       };
@@ -166,7 +170,9 @@ class AgentBridge {
   disconnect() {
     try {
       this.ws?.close();
-    } catch {}
+    } catch {
+      // Ignore close errors during manual disconnect.
+    }
     this.ws = null;
     this.setStatus("disconnected");
   }
