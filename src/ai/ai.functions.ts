@@ -119,3 +119,80 @@ export const generateWorkflowFromPrompt = createServerFn({ method: "POST" })
       return { error: "Could not parse workflow", workflow: null };
     }
   });
+
+/**
+ * Vision analysis of a single recorded step. Receives a screenshot (data URL
+ * or https URL) of the screen at the moment the user clicked, plus optional
+ * pixel coordinates of the click. Returns a short element description + the
+ * text on/near the element so the executor can find it again later.
+ */
+export const analyzeClickTarget = createServerFn({ method: "POST" })
+  .inputValidator((d: { imageUrl: string; x?: number; y?: number; appName?: string; rawLabel?: string }) => d)
+  .handler(async ({ data }) => {
+    const apiKey = process.env.LOVABLE_API_KEY;
+    if (!apiKey) return { error: "AI gateway not configured", description: null, ocr: null };
+
+    const coordHint = (typeof data.x === "number" && typeof data.y === "number")
+      ? ` The user clicked at pixel (${data.x}, ${data.y}) — a red bullseye marker has been drawn on the image at that point.`
+      : "";
+    const appHint = data.appName ? ` The active application is "${data.appName}".` : "";
+
+    const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash",
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: `You are a UI vision analyst for an automation tool.${appHint}${coordHint}\n\n` +
+                      `Identify the UI element being interacted with and respond ONLY by calling describe_target. ` +
+                      `Be specific about the element's role, text label, and visual location (e.g. "the blue 'Send' button at the bottom-right of the compose window"). ` +
+                      `If you can read text on or directly next to the element, include it verbatim in 'ocr'.`,
+              },
+              { type: "image_url", image_url: { url: data.imageUrl } },
+            ],
+          },
+        ],
+        tools: [{
+          type: "function",
+          function: {
+            name: "describe_target",
+            description: "Describe the UI element the user clicked",
+            parameters: {
+              type: "object",
+              properties: {
+                description: { type: "string", description: "Human-readable, specific description of the element" },
+                ocr: { type: "string", description: "Text visible on or directly next to the element (empty if none)" },
+                element_type: { type: "string", description: "e.g. button, link, input, menu item, cell, tab" },
+              },
+              required: ["description"],
+            },
+          },
+        }],
+        tool_choice: { type: "function", function: { name: "describe_target" } },
+      }),
+    });
+
+    if (!res.ok) {
+      if (res.status === 429) return { error: "rate_limited", description: null, ocr: null };
+      if (res.status === 402) return { error: "credits_exhausted", description: null, ocr: null };
+      const t = await res.text();
+      console.error("vision error", res.status, t);
+      return { error: `vision_${res.status}`, description: null, ocr: null };
+    }
+    const json = await res.json() as {
+      choices?: Array<{ message?: { tool_calls?: Array<{ function?: { arguments?: string } }> } }>;
+    };
+    const args = json.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments;
+    if (!args) return { error: "no_tool_call", description: null, ocr: null };
+    try {
+      const parsed = JSON.parse(args) as { description: string; ocr?: string; element_type?: string };
+      return { error: null, description: parsed.description, ocr: parsed.ocr ?? null, elementType: parsed.element_type ?? null };
+    } catch {
+      return { error: "parse_failed", description: null, ocr: null };
+    }
+  });
