@@ -1,17 +1,15 @@
 """
 EchoPilot Desktop Agent — local sidecar.
-Captures REAL mouse + keyboard input via pynput and tags every event with the
-currently-focused application / window title so the web UI can ignore actions
-that happened inside the EchoPilot browser tab itself.
 
-Run:
-    python -m venv .venv
-    source .venv/bin/activate          # Windows: .venv\\Scripts\\activate
-    pip install -r requirements.txt
-    python agent.py
+- Captures REAL mouse + keyboard input via pynput.
+- Tags every event with the focused app / window title.
+- Drops events whose window matches an ignore-pattern list (so actions inside
+  the EchoPilot browser tab itself never get recorded).
+- Can show a NATIVE OS dialog ("Explain this step") on top of whatever app
+  the user is currently in (not stuck inside the browser tab).
 
-macOS: grant the Terminal (or python binary) BOTH "Accessibility" and
-"Input Monitoring" in System Settings → Privacy & Security.
+macOS: grant Terminal both "Accessibility" and "Input Monitoring" in
+System Settings → Privacy & Security.
 """
 from __future__ import annotations
 
@@ -19,6 +17,8 @@ import asyncio
 import json
 import platform
 import secrets
+import shutil
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -34,7 +34,7 @@ except Exception as e:  # pragma: no cover
     print(f"[agent] pynput unavailable: {e!r} — recording will be disabled")
     HAVE_PYNPUT = False
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 HOST = "127.0.0.1"
 PORT = 8765
 SYS = platform.system()
@@ -47,16 +47,13 @@ def get_or_create_token() -> str:
         return TOKEN_FILE.read_text().strip()
     tok = secrets.token_urlsafe(9)
     TOKEN_FILE.write_text(tok)
-    try:
-        TOKEN_FILE.chmod(0o600)
-    except Exception:
-        pass
+    try: TOKEN_FILE.chmod(0o600)
+    except Exception: pass
     return tok
 
 
 # -------------------- Active window probe --------------------
 def _active_window() -> tuple[str, str]:
-    """Return (app_name, window_title). Best effort; "" on failure."""
     try:
         if SYS == "Darwin":
             try:
@@ -68,10 +65,8 @@ def _active_window() -> tuple[str, str]:
             title = ""
             try:
                 import Quartz  # type: ignore
-                opts = (
-                    Quartz.kCGWindowListOptionOnScreenOnly
-                    | Quartz.kCGWindowListExcludeDesktopElements
-                )
+                opts = (Quartz.kCGWindowListOptionOnScreenOnly
+                        | Quartz.kCGWindowListExcludeDesktopElements)
                 for w in Quartz.CGWindowListCopyWindowInfo(opts, Quartz.kCGNullWindowID) or []:
                     if w.get("kCGWindowOwnerName") == name:
                         t = w.get("kCGWindowName") or ""
@@ -94,7 +89,6 @@ def _active_window() -> tuple[str, str]:
                 return "", ""
         if SYS == "Linux":
             try:
-                import subprocess
                 out = subprocess.run(
                     ["xdotool", "getactivewindow", "getwindowname"],
                     capture_output=True, text=True, timeout=0.4,
@@ -105,6 +99,56 @@ def _active_window() -> tuple[str, str]:
     except Exception:
         pass
     return "", ""
+
+
+# -------------------- Native OS dialog --------------------
+def _native_prompt(title: str, message: str, default: str = "") -> str | None:
+    """Block in a worker thread; return user's text, or None if cancelled."""
+    try:
+        if SYS == "Darwin":
+            # AppleScript dialog floats over whatever app is focused.
+            safe_msg = message.replace('"', '\\"')
+            safe_def = default.replace('"', '\\"')
+            safe_title = title.replace('"', '\\"')
+            script = (
+                f'tell application "System Events" to '
+                f'display dialog "{safe_msg}" default answer "{safe_def}" '
+                f'with title "{safe_title}" buttons {{"Skip","Save"}} '
+                f'default button "Save"'
+            )
+            r = subprocess.run(["osascript", "-e", script],
+                               capture_output=True, text=True, timeout=120)
+            if r.returncode != 0:
+                return None  # user pressed Skip / cancelled
+            out = r.stdout.strip()
+            # Format: button returned:Save, text returned:hello
+            text = ""
+            for part in out.split(", "):
+                if part.startswith("text returned:"):
+                    text = part[len("text returned:"):]
+            return text
+        if SYS == "Windows" and shutil.which("powershell"):
+            safe_msg = message.replace('"', '`"')
+            safe_def = default.replace('"', '`"')
+            ps = (
+                'Add-Type -AssemblyName Microsoft.VisualBasic;'
+                f'[Microsoft.VisualBasic.Interaction]::InputBox("{safe_msg}","{title}","{safe_def}")'
+            )
+            r = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
+                               capture_output=True, text=True, timeout=120)
+            return r.stdout.strip() or None
+        if SYS == "Linux" and shutil.which("zenity"):
+            r = subprocess.run(
+                ["zenity", "--entry", f"--title={title}",
+                 f"--text={message}", f"--entry-text={default}"],
+                capture_output=True, text=True, timeout=120,
+            )
+            if r.returncode != 0:
+                return None
+            return r.stdout.strip()
+    except Exception as e:
+        print(f"[agent] native prompt failed: {e!r}")
+    return None
 
 
 # -------------------- Recorder --------------------
@@ -119,13 +163,22 @@ class Recorder:
         self._start_ts = 0.0
         self.active = False
         self.paused = False
+        self.ignore_patterns: list[str] = []
         self._lock = threading.Lock()
+
+    def _is_ignored(self, app_name: str, title: str) -> bool:
+        if not self.ignore_patterns:
+            return False
+        hay = f"{app_name} {title}".lower()
+        return any(p and p.lower() in hay for p in self.ignore_patterns)
 
     def _emit(self, ev: dict) -> None:
         if self.paused:
             return
-        ev["ts"] = int((time.monotonic() - self._start_ts) * 1000)
         app_name, title = _active_window()
+        if self._is_ignored(app_name, title):
+            return  # hard-drop events inside the EchoPilot tab itself
+        ev["ts"] = int((time.monotonic() - self._start_ts) * 1000)
         ev["app"] = app_name
         ev["window"] = title
         self.loop.call_soon_threadsafe(self.queue.put_nowait, ev)
@@ -167,10 +220,8 @@ class Recorder:
     def _on_press(self, key):
         if self.paused:
             return
-        try:
-            ch = key.char
-        except AttributeError:
-            ch = None
+        try: ch = key.char
+        except AttributeError: ch = None
         name = getattr(key, "name", None)
         if name in {"cmd", "cmd_l", "cmd_r", "ctrl", "ctrl_l", "ctrl_r", "alt", "alt_l", "alt_r"}:
             return
@@ -190,9 +241,10 @@ class Recorder:
         if self._typing_buffer and time.monotonic() - self._last_type_ts > 0.8:
             self._flush_typing()
 
-    def start(self) -> bool:
+    def start(self, ignore_patterns: list[str] | None = None) -> bool:
         if not HAVE_PYNPUT:
             return False
+        self.ignore_patterns = ignore_patterns or []
         if self.active:
             self.paused = False
             return True
@@ -254,15 +306,26 @@ async def ws_endpoint(ws: WebSocket):
             except Exception:
                 return
 
+    async def handle_prompt(req_id: str, title: str, message: str, default: str):
+        # Run blocking native dialog in a worker thread
+        result = await asyncio.to_thread(_native_prompt, title, message, default)
+        try:
+            await ws.send_json({
+                "type": "prompt_result",
+                "id": req_id,
+                "ok": result is not None,
+                "text": result or "",
+            })
+        except Exception:
+            pass
+
     pump_task: asyncio.Task | None = None
 
     try:
         while True:
             raw = await ws.receive_text()
-            try:
-                msg = json.loads(raw)
-            except Exception:
-                continue
+            try: msg = json.loads(raw)
+            except Exception: continue
             mtype = msg.get("type")
 
             if mtype == "auth":
@@ -285,32 +348,43 @@ async def ws_endpoint(ws: WebSocket):
                     await ws.send_json({"type": "error",
                         "msg": "pynput not installed. Run: pip install -r requirements.txt"})
                     continue
-                ok = recorder.start()
+                patterns = msg.get("ignore_patterns") or []
+                ok = recorder.start(patterns)
                 if ok:
                     await ws.send_json({"type": "recording_started"})
                     await ws.send_json({"type": "log", "level": "info",
-                        "msg": "Recording real mouse + keyboard input"})
+                        "msg": f"Recording (ignoring: {patterns or 'none'})"})
                 else:
                     await ws.send_json({"type": "error", "msg": "Failed to start recorder"})
 
+            elif mtype == "set_ignore_patterns":
+                recorder.ignore_patterns = msg.get("patterns") or []
+
             elif mtype == "pause_recording":
                 recorder.pause()
-                await ws.send_json({"type": "log", "level": "info", "msg": "Recording paused"})
 
             elif mtype == "resume_recording":
                 recorder.resume()
-                await ws.send_json({"type": "log", "level": "info", "msg": "Recording resumed"})
 
             elif mtype == "stop_recording":
                 recorder.stop()
                 await ws.send_json({"type": "recording_stopped", "events": []})
+
+            elif mtype == "prompt":
+                # Show a native dialog wherever the user is (not in browser)
+                asyncio.create_task(handle_prompt(
+                    msg.get("id", ""),
+                    msg.get("title", "EchoPilot"),
+                    msg.get("message", ""),
+                    msg.get("default", ""),
+                ))
 
             elif mtype == "screenshot":
                 await ws.send_json({"type": "screenshot", "data": None})
 
             elif mtype == "run":
                 await ws.send_json({"type": "log", "level": "warn",
-                    "msg": "Workflow execution is not yet wired in this agent build."})
+                    "msg": "Workflow execution not wired in this build."})
                 await ws.send_json({"type": "run_finished",
                     "runId": msg.get("runId", ""), "ok": False})
 
@@ -325,10 +399,9 @@ async def ws_endpoint(ws: WebSocket):
 def main():
     print("=" * 60)
     print(f" EchoPilot Desktop Agent v{VERSION}")
-    print(f" Listening on ws://{HOST}:{PORT}/ws")
-    print(f" Pairing token: {TOKEN}")
-    print(f" pynput available: {HAVE_PYNPUT}")
-    print(" macOS: grant Terminal Accessibility + Input Monitoring permissions")
+    print(f" ws://{HOST}:{PORT}/ws  token: {TOKEN}")
+    print(f" pynput: {HAVE_PYNPUT}  | OS: {SYS}")
+    print(" macOS: grant Terminal Accessibility + Input Monitoring")
     print("=" * 60)
     uvicorn.run(app, host=HOST, port=PORT, log_level="warning")
 
