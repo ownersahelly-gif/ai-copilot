@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
+
 import { generateWorkflowFromPrompt, analyzeClickTarget } from "@/ai/ai.functions";
 import { useServerFn } from "@tanstack/react-start";
 import { createWorkflow, type WorkflowStep, type WorkflowVariable } from "@/lib/workflows";
@@ -57,9 +57,11 @@ function Studio() {
   const [ignoreSelf, setIgnoreSelf] = useState(true);
   const [extraIgnore, setExtraIgnore] = useState("");
   const [screenOn, setScreenOn] = useState(false);
-  const [explainEach, setExplainEach] = useState(false);
-  const [pendingEvent, setPendingEvent] = useState<RecordedEvent | null>(null);
+  const [explainEach, setExplainEach] = useState(true);
+  const [explainQueue, setExplainQueue] = useState<RecordedEvent[]>([]);
   const [pendingExplain, setPendingExplain] = useState("");
+  const pendingEvent = explainQueue[0] ?? null;
+  
 
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startTsRef = useRef(0);
@@ -169,7 +171,7 @@ function Studio() {
   };
 
   // Track outstanding native prompts
-  const pendingPromptsRef = useRef<Map<string, RecordedEvent>>(new Map());
+  
 
   // Subscribe to agent events while in demo mode
   useEffect(() => {
@@ -183,12 +185,15 @@ function Studio() {
           if (isOwnTabEvent(ev, extras)) return;
         }
         const auto = autoExplain(ev);
-        // Try to grab a frame of the screen at this moment, with a marker
-        // for click events.
         let thumb: { url: string; w: number; h: number } | null = null;
-        if (streamRef.current) {
+        if (streamRef.current && videoRef.current?.videoWidth) {
           const isClick = ev.kind === "click" && typeof ev.x === "number" && typeof ev.y === "number";
-          thumb = isClick ? captureFrame(ev.x!, ev.y!) : captureFrame();
+          if (isClick) {
+            const scale = videoRef.current.videoWidth / Math.max(1, window.screen.width);
+            thumb = captureFrame(ev.x! * scale, ev.y! * scale);
+          } else {
+            thumb = captureFrame();
+          }
         }
         const enriched: RecordedEvent = {
           ...ev,
@@ -198,37 +203,10 @@ function Studio() {
           thumbH: thumb?.h,
         };
         setEvents((prev) => [...prev, enriched].slice(-200));
-
         if (!explainEach || shouldAutoAccept(ev)) return;
-
-        // Non-blocking: queue a desktop notification only (no modal, no pause)
-        // so the user can keep clicking. They can edit explanations on the
-        // review screen after pressing Stop.
-        const id = `p_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-        pendingPromptsRef.current.set(id, enriched);
-        try {
-          (agent as any).notify?.({
-            id,
-            title: "EchoPilot — captured step",
-            message: auto,
-          });
-        } catch { /* ignore */ }
-      } else if (e.type === "prompt_result") {
-        const target = pendingPromptsRef.current.get(e.id);
-        pendingPromptsRef.current.delete(e.id);
-        if (target) {
-          const text = e.ok && e.text ? e.text : target.explanation;
-          setEvents((prev) => {
-            const idx = prev.lastIndexOf(target);
-            if (idx < 0) return prev;
-            const next = prev.slice();
-            next[idx] = { ...target, explanation: text };
-            return next;
-          });
-        }
-        try { agent.resumeRecording(); } catch { /* ignore */ }
+        setExplainQueue((q) => [...q, enriched]);
       } else if (e.type === "recording_started") {
-        toast.success("Recording started — explanations will pop up on your screen");
+        toast.success("Recording started — pop-ups will ask you to explain steps");
       } else if (e.type === "recording_stopped") {
         if (e.events?.length) setEvents((prev) => [...prev, ...e.events]);
       } else if (e.type === "error") {
@@ -353,22 +331,22 @@ function Studio() {
   const submitExplanation = () => {
     if (!pendingEvent) return;
     const text = pendingExplain.trim();
-    setEvents((prev) => {
-      const idx = prev.lastIndexOf(pendingEvent);
-      if (idx < 0) return prev;
-      const next = prev.slice();
-      next[idx] = { ...pendingEvent, explanation: text || pendingEvent.explanation };
-      return next;
-    });
-    setPendingEvent(null);
+    if (text) {
+      setEvents((prev) => {
+        const idx = prev.lastIndexOf(pendingEvent);
+        if (idx < 0) return prev;
+        const next = prev.slice();
+        next[idx] = { ...pendingEvent, explanation: text };
+        return next;
+      });
+    }
+    setExplainQueue((q) => q.slice(1));
     setPendingExplain("");
-    try { agent.resumeRecording(); } catch { /* ignore */ }
   };
 
   const skipExplanation = () => {
-    setPendingEvent(null);
+    setExplainQueue((q) => q.slice(1));
     setPendingExplain("");
-    try { agent.resumeRecording(); } catch { /* ignore */ }
   };
 
   const generateFromPrompt = async () => {
@@ -569,40 +547,37 @@ function Studio() {
           </div>
         </div>
 
-        {/* Explain-this-step modal */}
-        <Dialog open={!!pendingEvent} onOpenChange={(o) => { if (!o) skipExplanation(); }}>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Explain this step</DialogTitle>
-              <DialogDescription>
-                Tell EchoPilot what this action means so it can repeat it intelligently next time.
-              </DialogDescription>
-            </DialogHeader>
-            {pendingEvent && (
-              <div className="rounded-md border border-border/60 bg-card/60 p-3 text-xs">
-                <div className="font-medium">{pendingEvent.label}</div>
-                {(pendingEvent.app || pendingEvent.window) && (
-                  <div className="mt-1 text-muted-foreground">
-                    {pendingEvent.app}{pendingEvent.app && pendingEvent.window ? " · " : ""}{pendingEvent.window}
-                  </div>
-                )}
-              </div>
-            )}
+        {/* Floating, non-blocking explain-this-step card */}
+        {pendingEvent && (
+          <div className="fixed bottom-6 right-6 z-50 w-[360px] rounded-xl border border-border/60 bg-card/95 p-4 shadow-2xl backdrop-blur">
+            <div className="flex items-center justify-between">
+              <div className="text-xs font-semibold text-primary">Explain this step{explainQueue.length > 1 ? ` (${explainQueue.length} queued)` : ""}</div>
+              <button onClick={skipExplanation} className="text-[11px] text-muted-foreground hover:text-foreground">Skip</button>
+            </div>
+            <div className="mt-2 rounded-md border border-border/60 bg-background/60 p-2 text-[11px]">
+              <div className="font-medium">{pendingEvent.label}</div>
+              {(pendingEvent.app || pendingEvent.window) && (
+                <div className="mt-0.5 text-muted-foreground">
+                  {pendingEvent.app}{pendingEvent.app && pendingEvent.window ? " · " : ""}{pendingEvent.window}
+                </div>
+              )}
+            </div>
             <Textarea
               autoFocus
               value={pendingExplain}
               onChange={(e) => setPendingExplain(e.target.value)}
-              placeholder="e.g. Open the customer's record so I can update their address"
-              className="min-h-[100px]"
+              onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); submitExplanation(); } }}
+              placeholder={pendingEvent.explanation || "Why did you do this?"}
+              className="mt-2 min-h-[70px] text-xs"
             />
-            <DialogFooter>
-              <Button variant="outline" onClick={skipExplanation}>Skip</Button>
-              <Button onClick={submitExplanation} style={{ background: "var(--gradient-primary)", color: "var(--primary-foreground)" }}>
-                Save & continue
+            <div className="mt-2 flex justify-end gap-2">
+              <Button size="sm" variant="outline" onClick={skipExplanation}>Skip</Button>
+              <Button size="sm" onClick={submitExplanation} style={{ background: "var(--gradient-primary)", color: "var(--primary-foreground)" }}>
+                Save (⌘↵)
               </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
